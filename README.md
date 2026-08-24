@@ -36,9 +36,22 @@ input and misreports hooks.
 Needs only `luajit.exe`. No C compiler and no `winapi` module. FFI calls
 `user32`, `kernel32`, and `gdi32` directly.
 
+Get LuaJIT installed and on PATH on a bare rig with the PowerShell setup. It
+installs via winget, pins the binary to `C:\tools\luajit`, fixes PATH, and
+verifies.
+
+```
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+Then run the spike:
+
 ```
 luajit spike_hook_loop_alert.lua
 ```
+
+`setup.sh` remains as a from-source build (LuaJIT via MSVC in Git Bash) for rigs
+without winget.
 
 - `Ctrl+Alt+K` pops a native alert and swallows the K keystroke.
 - `Ctrl+Alt+Q` quits.
