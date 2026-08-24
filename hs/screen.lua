@@ -1,11 +1,12 @@
 -- hs.screen  (Thread G, leaf) --
     -- Monitor enumeration and geometry, matching Hammerspoon's `hs.screen`.
     --
-    -- Depends on FOUNDATION (`mud.win32`) for shared FFI TYPES only. Per the frozen
-    -- cdef-ownership rule: Foundation cdefs the common typedefs (HANDLE, HDC, RECT,
-    -- POINT, BOOL, DWORD, LONG, UINT, WORD, BYTE, LPCSTR, LPARAM ...) and loads the
-    -- libs once. This module cdefs ONLY its own unique function prototypes and the
-    -- MONITORINFOEXA struct, and never redeclares a shared type.
+    -- Depends on FOUNDATION (`hs.foundation`) for shared FFI TYPES only. Per the
+    -- frozen cdef-ownership rule: foundation cdefs the common typedefs (HANDLE, HDC,
+    -- RECT, POINT, BOOL, DWORD, LONG, UINT, WORD, BYTE, LPCSTR, LPARAM ...) and loads
+    -- the libs once (exposed as host.C.user32/.kernel32/.gdi32). This module cdefs
+    -- ONLY its own unique function prototypes and the MONITORINFOEXA struct, and
+    -- never redeclares a shared type.
     --
     -- Coordination notes for the other threads:
     --   * GetSystemMetrics is OWNED here (Thread G in the plan). Foundation and other
@@ -22,16 +23,16 @@
 
 local ffi = require("ffi")
 
--- Foundation: force shared types + libs to be present. --
-    -- Honest hard dependency. If this throws "module 'mud.win32' not found", the
-    -- Foundation thread's base has not loaded yet -- load it before hs.screen.
-    local win32 = require("mud.win32")
+-- Foundation: shared types + the single loaded user32 handle. --
+    -- Honest hard dependency. If this throws "module 'hs.foundation' not found", the
+    -- substrate has not loaded yet -- foundation must load before hs.screen so its
+    -- shared typedefs (RECT, HANDLE, HDC ...) exist for our cdef below.
+    local host = require("hs.foundation")
 
-    -- Reuse Foundation's single loaded user32 if it exposes one; otherwise load our
-    -- own handle. Loading a lib twice is harmless in LuaJIT (the C declarations are
-    -- process-global regardless). This one adapter line is the only place to touch if
-    -- Foundation names its exported handles differently.
-    local U = (win32 and win32.user32) or ffi.load("user32")
+    -- Reuse foundation's single loaded user32 (host.C.user32). Falls back to a fresh
+    -- load only if that seam ever moves; loading a lib twice is harmless in LuaJIT
+    -- (the C declarations are process-global regardless).
+    local U = (host.C and host.C.user32) or ffi.load("user32")
 -- END --
 
 -- Own FFI surface (functions + unique struct only; shared types come from Foundation) --
@@ -124,20 +125,24 @@ int  GetSystemMetrics(int);
     -- MONITORENUMPROC. Kept at module scope so the GC never frees the C callback
     -- while EnumDisplayMonitors still holds it (the standard LuaJIT FFI footgun).
     local enumProc = ffi.cast("MONITORENUMPROC", function(hMonitor, _hdc, _lprc, _lparam)
-        local mi = ffi.new("MONITORINFOEXA")
-        mi.cbSize = ffi.sizeof("MONITORINFOEXA")
+        -- Never let a Lua error unwind through EnumDisplayMonitors (FFI boundary):
+        -- a throw here is a hard crash. Skip the bad monitor, keep enumerating.
+        pcall(function()
+            local mi = ffi.new("MONITORINFOEXA")
+            mi.cbSize = ffi.sizeof("MONITORINFOEXA")
 
-        if U.GetMonitorInfoA(hMonitor, mi) ~= 0 then
-            local m = mi.rcMonitor
-            local w = mi.rcWork
+            if U.GetMonitorInfoA(hMonitor, mi) ~= 0 then
+                local m = mi.rcMonitor
+                local w = mi.rcWork
 
-            collected[#collected + 1] = {
-                deviceName = ffi.string(mi.szDevice),
-                primary    = (tonumber(mi.dwFlags) % 2) == 1,  -- PRIMARY is bit 0
-                monitor    = { x = m.left, y = m.top, w = m.right - m.left, h = m.bottom - m.top },
-                work       = { x = w.left, y = w.top, w = w.right - w.left, h = w.bottom - w.top },
-            }
-        end
+                collected[#collected + 1] = {
+                    deviceName = ffi.string(mi.szDevice),
+                    primary    = (tonumber(mi.dwFlags) % 2) == 1,  -- PRIMARY is bit 0
+                    monitor    = { x = m.left, y = m.top, w = m.right - m.left, h = m.bottom - m.top },
+                    work       = { x = w.left, y = w.top, w = w.right - w.left, h = w.bottom - w.top },
+                }
+            end
+        end)
 
         return 1  -- TRUE: keep enumerating
     end)
