@@ -74,8 +74,11 @@ as `ev:getProperty("extra")`, so a packet can ignore its own injected events.
 ### 2. `hs.keycodes.map` (D)
 
 Bidirectional, matching Hammerspoon: `map[name] → code` **and** `map[code] →
-name`. Also expose `hs.keycodes.map(x)` that resolves either direction. Codes are
-Windows virtual-key codes (what the event object's `getKeyCode()` returns).
+name` — a plain table, not callable (as in real Hammerspoon). For explicit
+lookups use `hs.keycodes.keyCodeForName(name)` / `nameForKeyCode(code)`. Codes are
+Windows virtual-key codes (what the event object's `getKeyCode()` returns);
+names are the Hammerspoon names so scripts port unchanged. Note `"fn"` has no
+Win32 code and is intentionally absent — do not rely on it.
 
 ### 3. Host dispatch (foundation, consumed by B and F)
 
