@@ -20,28 +20,45 @@
     --   MUDSCRIPT_ROOT defaults to $MUDSCRIPT_HOME, else a sibling ../mudscript.
 -- END --
 
--- Locate the two trees --
+-- Locate the trees + the HOME mudscript installs under --
     -- This file sits at the mudspoon repo root; hs/ is beside it.
     local here = (arg[0] or "run_mudscript.lua"):gsub("[^/\\]*$", "")
     if here == "" then here = "./" end
 
-    local mudscriptRoot = arg[1]
-                        or os.getenv("MUDSCRIPT_HOME")
-                        or (here .. "../mudscript")
-    -- Strip any trailing slash for clean concatenation.
-    mudscriptRoot = mudscriptRoot:gsub("[/\\]+$", "")
+    -- mudscript installs into $HOME/.hammerspoon (see mac/install.sh) and addresses
+    -- itself through os.getenv("HOME").."/.hammerspoon/..." all over, NOT hs.configdir.
+    -- So HOME is the anchor. On the rig it is the dir CONTAINING .hammerspoon.
+    local homeDir = arg[1]
+                  or os.getenv("MUDSCRIPT_HOME")
+                  or (here .. "../mudscript")
+    homeDir = homeDir:gsub("[/\\]+$", "")            -- strip trailing slash
 
-    local macDir = mudscriptRoot .. "/mac"
+    local hsDir = homeDir .. "/.hammerspoon"          -- the actual config/install dir
 -- END --
 
--- package.path: mudspoon hs/ first, then mudscript mac/ (for lib.* requires) --
+-- Make os.getenv("HOME") resolve (Windows has USERPROFILE, not HOME) --
+    -- Shimmed rather than set via _putenv: LuaJIT's os.getenv reads the CRT env, and
+    -- which CRT wins is fragile on Windows. A wrapper is portable and total: mac/ sees
+    -- HOME (and a TMPDIR) no matter the host. Real vars still win when present.
+    do
+        local realGetenv = os.getenv
+        local fallback = {
+            HOME   = homeDir,
+            TMPDIR = realGetenv("TMPDIR") or realGetenv("TEMP") or realGetenv("TMP")
+                     or (homeDir .. "/tmp"),
+        }
+        os.getenv = function(k) return realGetenv(k) or fallback[k] end
+    end
+-- END --
+
+-- package.path: mudspoon hs/ first, then the .hammerspoon install (for lib.* requires) --
     -- require("hs.timer")        -> <mudspoon>/hs/timer.lua
-    -- require("lib.ms_guardian") -> <mudscript>/mac/lib/ms_guardian.lua
+    -- require("lib.ms_guardian") -> <home>/.hammerspoon/lib/ms_guardian.lua
     package.path = table.concat({
-        here    .. "?.lua",
-        here    .. "?/init.lua",
-        macDir  .. "/?.lua",
-        macDir  .. "/?/init.lua",
+        here  .. "?.lua",
+        here  .. "?/init.lua",
+        hsDir .. "/?.lua",
+        hsDir .. "/?/init.lua",
         package.path,
     }, ";")
 -- END --
@@ -115,11 +132,11 @@
 -- Host-provided hs fields Hammerspoon.app normally sets (not modules) --
     -- configdir is a real STRING (mac/ concatenates paths onto it); the rest are
     -- lightweight host hooks stubbed until they earn a real implementation.
-    hs.configdir = macDir
+    hs.configdir = hsDir
 
     -- reload: re-run the entry file in place. Good enough for the config-reload the
     -- shell triggers; a fuller version would tear down state first.
-    local ENTRY = macDir .. "/init.lua"
+    local ENTRY = hsDir .. "/init.lua"
     function hs.reload()
         local chunk, err = loadfile(ENTRY)
         if not chunk then io.stderr:write("hs.reload: " .. tostring(err) .. "\n"); return end
@@ -134,7 +151,7 @@
 -- END --
 
 -- Boot: run the entry file, then drive the runloop --
-    io.stdout:write("[run_mudscript] booting mudscript from " .. macDir .. "\n")
+    io.stdout:write("[run_mudscript] booting mudscript from " .. hsDir .. "\n")
 
     local chunk, lerr = loadfile(ENTRY)
     if not chunk then
