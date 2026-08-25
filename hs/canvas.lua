@@ -1,18 +1,20 @@
--- hs.canvas  (Win32/GDI backend for the element subset mudscript draws) --
-    -- Hammerspoon's hs.canvas is a full vector surface; mudscript uses a narrow
-    -- slice of it -- ms_alert draws each toast as ONE canvas: a rounded, translucent
-    -- rectangle (fill + 1px accent stroke) plus two centred text elements (the
-    -- message and a close glyph). This module implements exactly that slice over a
-    -- borderless, layered, top-most GDI popup -- the same substrate shape as
-    -- hs.alert.window, generalised to a mutable element list.
+-- hs.canvas  (Win32 per-pixel-alpha backend for the element subset mudscript draws) --
+    -- Hammerspoon's hs.canvas is a full vector surface; mudscript uses a narrow slice
+    -- -- ms_alert draws each toast as ONE canvas: a rounded, translucent rectangle
+    -- (fill + 1px accent stroke) plus two centred text elements (the message and a
+    -- close glyph). This implements that slice as a borderless, layered, top-most
+    -- popup whose pixels come from UpdateLayeredWindow -- a 32bpp premultiplied bitmap
+    -- drawn ANTI-ALIASED with GDI+. That gives smooth rounded corners and genuinely
+    -- transparent corners (no clip-to-background white), plus true per-pixel alpha, so
+    -- the fill translucency and the close-glyph fade are real, not faked.
     --
     -- Contract mudscript relies on (see mac/lib/ms_alert.lua):
     --   hs.canvas.windowLevels / .windowBehaviors  -- numeric tables read at load
     --   hs.canvas.new({x,y,w,h}) -> canvas
-    --     :level(n) :behavior(n) :alpha([a])   -- a in 0..1
+    --     :level(n) :behavior(n) :alpha([a])   -- a in 0..1 (whole-window fade)
     --     :frame([{x,y,w,h}])                   -- get (copy) / set (moves+resizes)
     --     :appendElements(el, ...)              -- rectangle | text specs
-    --     :elementAttribute(i, key, value)      -- mutate one element, repaint
+    --     :elementAttribute(i, key, value)      -- mutate one element, re-render
     --     :mouseCallback(fn)  -- fn(canvas, msg, elemId, x, y); msg =
     --                            "mouseEnter"|"mouseExit"|"mouseDown"
     --     :show() :delete()   -- delete is idempotent
@@ -22,21 +24,22 @@
     --   text:      text, textFont, textSize, textColor, textAlignment, frame{x,y,w,h}
     -- Colours are Hammerspoon tables {red,green,blue,alpha} in 0..1.
     --
-    -- FIDELITY NOTES (deliberate, first-pass):
-    --   * GDI gives ONE whole-window alpha (SetLayeredWindowAttributes), not
-    --     per-pixel. So a fillColor's own alpha and the animated :alpha() are
-    --     MULTIPLIED into that single window alpha; a text element's alpha is faked
-    --     by blending its colour toward the box fill (the box is opaque behind it),
-    --     which is what the close-glyph fade and the morph cross-fade need.
+    -- RENDER MODEL: render() (re)builds a top-down 32bpp DIB the size of the window,
+    -- draws the elements into it with GDI+ (premultiplied PARGB, anti-aliased), then
+    -- pushes it with UpdateLayeredWindow. The whole-window fade (:alpha) is the ULW
+    -- BLENDFUNCTION's SourceConstantAlpha -- so a fade step just re-pushes the same DIB
+    -- with a new constant alpha, no re-render. A position-only :frame move likewise
+    -- re-pushes without redrawing; a size change re-renders.
     --
-    -- THREADING: every entry point touches the window on the calling thread, which
-    -- must be the runloop/pump thread (so WM_PAINT reaches our WndProc). mudscript
-    -- only drives canvases from timer callbacks, which run there.
+    -- THREADING: every entry point touches the window on the calling thread, which must
+    -- be the runloop/pump thread. mudscript drives canvases only from timer callbacks.
     --
-    -- CDEF OWNERSHIP: foundation owns every shared typedef; this module cdefs ONLY
-    -- function prototypes no other loaded module declares. It does NOT touch
-    -- MultiByteToWideChar (webview owns that, conditionally) -- UTF-8 -> UTF-16 is
-    -- done in pure Lua below, so canvas is independent of whether webview loaded.
+    -- DPI: all incoming coords + font sizes are LOGICAL (mac-like points); logi() scales
+    -- them to physical device pixels at the window boundary. See [[hs.dpiscale]].
+    --
+    -- CDEF OWNERSHIP: foundation owns shared typedefs; this cdefs ONLY prototypes/structs
+    -- nothing else declares. UTF-8 -> UTF-16 is pure-Lua (no MultiByteToWideChar, which
+    -- webview owns conditionally), so canvas is independent of whether webview loaded.
 -- END --
 
 local ffi = require("ffi")
@@ -49,29 +52,72 @@ local U        = host.C.user32
 local G        = host.C.gdi32
 local hInst    = host.moduleHandle
 
--- All hs.canvas coordinates + font sizes are LOGICAL (mac-like points); windows are
--- drawn at native device pixels. logi() scales a logical value to physical for the
--- GDI/window calls; unscale() maps a physical pointer coord back to logical for hit
--- testing. With the process DPI-unaware, scale is 1.0 and both are identity.
+-- gdiplus is standard on Windows, but guard the load so a missing DLL degrades to a
+-- (blank) no-op canvas rather than crashing boot -- canvas is required at startup.
+local okGP, GP = pcall(ffi.load, "gdiplus")
+if not okGP then GP = nil end
+
+-- Logical (mac-point) -> physical device pixels; unscale maps a physical pointer coord
+-- back to logical for hit testing. Scale is 1.0 when the process is DPI-unaware.
 local function logi(v)    return math.floor(v * dpiscale.get() + 0.5) end
 local function unscale(v) return v / dpiscale.get() end
 
--- Own FFI surface: only prototypes nothing else has declared globally --
-    -- (RegisterClassExA/CreateWindowExA/ShowWindow/DestroyWindow/DefWindowProcA/
-    -- BeginPaint/EndPaint/GetClientRect/FillRect/DrawTextA/CreateSolidBrush/
-    -- CreateRoundRectRgn/DeleteObject/SetBkMode/SetTextColor/SetWindowRgn/
-    -- SetLayeredWindowAttributes/SetWindowPos/MoveWindow are all declared by
-    -- foundation / hs.alert.window / hs.window and reached via U./G. below.)
+-- Own FFI surface (functions + structs nothing else declares) --
     ffi.cdef[[
-BOOL    InvalidateRect(HWND, const RECT*, BOOL);
-int     FrameRgn(HDC, HRGN, HBRUSH, int, int);
-HGDIOBJ SelectObject(HDC, HGDIOBJ);
-void*   CreateFontW(int,int,int,int,int,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,const unsigned short*);
-int     DrawTextW(HDC, const unsigned short*, int, RECT*, UINT);
+/* --- window + layered blit (user32) --- */
+BOOL    UpdateLayeredWindow(HWND, HDC, POINT*, void* /*SIZE*/, HDC, POINT*, DWORD, void* /*BLENDFUNCTION*/, DWORD);
 HCURSOR LoadCursorA(HINSTANCE, LPCSTR);
-BOOL    UpdateWindow(HWND);
+
+/* --- memory DC + DIB (gdi32) --- */
+HDC     CreateCompatibleDC(HDC);
+BOOL    DeleteDC(HDC);
+void*   CreateDIBSection(HDC, const void*, unsigned int, void**, HANDLE, DWORD);
+HGDIOBJ SelectObject(HDC, HGDIOBJ);
+
+/* --- mouse tracking (user32) --- */
 typedef struct { DWORD cbSize; DWORD dwFlags; HWND hwndTrack; DWORD dwHoverTime; } MUDSPOON_TME;
 BOOL    TrackMouseEvent(MUDSPOON_TME*);
+
+/* --- structs --- */
+typedef struct { LONG cx; LONG cy; } SIZE;
+typedef struct { BYTE BlendOp; BYTE BlendFlags; BYTE SourceConstantAlpha; BYTE AlphaFormat; } BLENDFUNCTION;
+typedef struct {
+    DWORD biSize; LONG biWidth; LONG biHeight; WORD biPlanes; WORD biBitCount;
+    DWORD biCompression; DWORD biSizeImage; LONG biXPelsPerMeter; LONG biYPelsPerMeter;
+    DWORD biClrUsed; DWORD biClrImportant;
+} BITMAPINFOHEADER;
+typedef struct { float X; float Y; float Width; float Height; } GpRectF;
+typedef struct { unsigned int GdiplusVersion; void* DebugEventCallback; int Suppress1; int Suppress2; } GpStartupInput;
+
+/* --- GDI+ flat API (gdiplus) --- */
+int GdiplusStartup(ULONG_PTR*, const GpStartupInput*, void*);
+int GdipCreateBitmapFromScan0(int, int, int, int, unsigned char*, void**);
+int GdipGetImageGraphicsContext(void*, void**);
+int GdipDisposeImage(void*);
+int GdipDeleteGraphics(void*);
+int GdipSetSmoothingMode(void*, int);
+int GdipSetTextRenderingHint(void*, int);
+int GdipGraphicsClear(void*, unsigned int);
+int GdipCreatePath(int, void**);
+int GdipDeletePath(void*);
+int GdipAddPathArc(void*, float, float, float, float, float, float);
+int GdipClosePathFigure(void*);
+int GdipCreateSolidFill(unsigned int, void**);
+int GdipDeleteBrush(void*);
+int GdipFillPath(void*, void*, void*);
+int GdipCreatePen1(unsigned int, float, int, void**);
+int GdipDeletePen(void*);
+int GdipDrawPath(void*, void*, void*);
+int GdipCreateFontFamilyFromName(const unsigned short*, void*, void**);
+int GdipGetGenericFontFamilySansSerif(void**);
+int GdipDeleteFontFamily(void*);
+int GdipCreateFont(void*, float, int, int, void**);
+int GdipDeleteFont(void*);
+int GdipCreateStringFormat(int, int, void**);
+int GdipDeleteStringFormat(void*);
+int GdipSetStringFormatAlign(void*, int);
+int GdipSetStringFormatLineAlign(void*, int);
+int GdipDrawString(void*, const unsigned short*, int, void*, const GpRectF*, void*, void*);
 ]]
 -- END --
 
@@ -84,8 +130,6 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     local EX_STYLE          = bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
 
     local SW_SHOWNOACTIVATE = 4
-    local LWA_ALPHA         = 0x02
-    local TRANSPARENT       = 1
 
     local HWND_TOPMOST      = ffi.cast("HWND", ffi.cast("intptr_t", -1))
     local SWP_NOSIZE        = 0x0001
@@ -101,69 +145,44 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     local WM_MOUSELEAVE     = 0x02A3
     local TME_LEAVE         = 0x00000002
 
-    -- Keep-on-top cadence. The mudscript shell is ALSO WS_EX_TOPMOST and re-fronts
-    -- itself on shell events (:bringToFront); within the one topmost band last-fronted
-    -- wins, so a canvas fronted once at show() gets buried the instant the shell fronts.
-    -- A top-most canvas re-asserts its z-order every FRONT_MS for its whole life. This
-    -- is why alerts render before load (no shell yet) but vanished after (shell on top).
-    local FRONT_MS          = 0.1
+    local FRONT_MS          = 0.1   -- keep-on-top re-front cadence (see startKeepFront)
 
-    -- DrawTextW formats. Long / multi-line text (the message) wraps and hangs from
-    -- the top of its frame; short text (the close glyph) centres on both axes.
-    local DT_CENTER     = 0x00000001
-    local DT_VCENTER    = 0x00000004
-    local DT_WORDBREAK  = 0x00000010
-    local DT_SINGLELINE = 0x00000020
-    local DT_NOPREFIX   = 0x00000800
-    local FMT_WRAP      = bit.bor(DT_CENTER, DT_WORDBREAK, DT_NOPREFIX)
-    local FMT_GLYPH     = bit.bor(DT_CENTER, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX)
+    -- UpdateLayeredWindow
+    local ULW_ALPHA         = 0x02
+    local AC_SRC_OVER       = 0x00
+    local AC_SRC_ALPHA      = 0x01
+    local BI_RGB            = 0
+    local DIB_RGB_COLORS    = 0
 
-    -- Font: DEFAULT_CHARSET, CLEARTYPE_QUALITY, normal weight. Negative height asks
-    -- for character (not cell) height; textSize is used 1:1 (see the font code).
-    local FW_NORMAL         = 400
-    local DEFAULT_CHARSET   = 1
-    local CLEARTYPE_QUALITY = 5
+    -- GDI+ enums
+    local SMOOTHING_ANTIALIAS   = 4
+    local TEXT_ANTIALIAS        = 4     -- grayscale AA -> correct alpha on transparency
+    local UNIT_PIXEL            = 2
+    local FILLMODE_ALTERNATE    = 0
+    local FONTSTYLE_REGULAR     = 0
+    local STR_ALIGN_CENTER      = 1
+    local PF_32BPP_PARGB        = 0x000E200B   -- PixelFormat32bppPARGB (premultiplied)
 
     local DEFAULT_RADIUS    = 20
-    local DEFAULT_BG        = 0x001C1F24    -- COLORREF 0x00BBGGRR
-    local DEFAULT_FG        = 0x00E8E8E8
+    local DEFAULT_BG_ARGB   = 0xFF1C1F24   -- deepslate, opaque
+    local DEFAULT_FG_ARGB   = 0xFFE8E8E8
 
     local CLASS             = "MudspoonCanvas"
 -- END --
 
--- Colour helpers --
-    -- Hammerspoon colours are {red,green,blue,alpha} in 0..1. -> COLORREF 0x00BBGGRR.
-    local function toRef(c, fallback)
+-- Colour helpers: Hammerspoon {red,green,blue,alpha} 0..1 -> GDI+ ARGB 0xAARRGGBB --
+    local function toArgb(c, fallback)
         if type(c) ~= "table" or c.red == nil then return fallback end
+        local a = math.floor((c.alpha or 1) * 255 + 0.5)
         local r = math.floor((c.red   or 0) * 255 + 0.5)
         local g = math.floor((c.green or 0) * 255 + 0.5)
         local b = math.floor((c.blue  or 0) * 255 + 0.5)
-        return r + g * 256 + b * 65536
-    end
-
-    local function alphaOf(c, default)
-        if type(c) == "table" and c.alpha ~= nil then return c.alpha end
-        return default
-    end
-
-    -- Blend a COLORREF toward another by (1-a): fakes per-element text alpha against
-    -- the opaque box behind it.
-    local function blendRef(fg, bg, a)
-        if a >= 1 then return fg end
-        if a <= 0 then return bg end
-        local function ch(v, shift)
-            local f = bit.band(bit.rshift(v, shift), 0xFF)
-            local b = bit.band(bit.rshift(bg, shift), 0xFF)
-            return math.floor(b + (f - b) * a + 0.5)
-        end
-        return ch(fg, 0) + ch(fg, 8) * 256 + ch(fg, 16) * 65536
+        return a * 0x1000000 + r * 0x10000 + g * 0x100 + b
     end
 -- END --
 
 -- UTF-8 -> UTF-16 (pure Lua; no MultiByteToWideChar dependency) --
     -- Returns an ffi uint16[?] buffer (NUL-terminated). Malformed bytes are skipped.
-    -- Handles the full BMP plus astral planes (surrogate pairs) so em-dashes,
-    -- bullets, and the close glyph render correctly through DrawTextW.
     local function toWide(s)
         s = tostring(s or "")
         local units, i, n = {}, 1, #s
@@ -197,14 +216,25 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     end
 -- END --
 
+-- GDI+ startup (once, for the process life) --
+    local gdiplusOk = false
+    do
+        local token = ffi.new("ULONG_PTR[1]")
+        local input = ffi.new("GpStartupInput")
+        input.GdiplusVersion = 1
+        gdiplusOk = pcall(function() return GP.GdiplusStartup(token, input, nil) == 0 end) and true
+        _G.__mudspoon_gdiplusToken = token   -- anchor; never shut down (process exit frees)
+    end
+-- END --
+
 -- Per-window records for the shared WndProc, keyed by HWND-as-integer --
     local records = {}
-    local paintErrLogged = false   -- gate the one-time swallowed-paint-error log
+    local renderErrLogged = false
+
     local function keyOf(hwnd) return tonumber(ffi.cast("intptr_t", hwnd)) end
 
-    -- Hit-test: the top-most element (highest index) whose frame contains (x,y).
-    -- The rectangle (index 1, no frame) is the whole client, so it always matches
-    -- as the fallback. Returns the 1-based element id.
+    -- Hit-test: the top-most element (highest index) whose frame contains (x,y),
+    -- else 1 (the rectangle -- whole client). Coords are LOGICAL.
     local function hitTest(rec, x, y)
         for idx = #rec.elements, 1, -1 do
             local el = rec.elements[idx]
@@ -217,96 +247,16 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     end
 -- END --
 
--- Painting --
-    local function paint(rec, hwnd)
-        local ps  = ffi.new("PAINTSTRUCT")
-        local hdc = U.BeginPaint(hwnd, ps)
-        local rc  = ffi.new("RECT")
-        U.GetClientRect(hwnd, rc)
-        local w, h = rc.right - rc.left, rc.bottom - rc.top
-
-        local els  = rec.elements
-        local box  = els[1]
-        local bgRef = box and toRef(box.fillColor, DEFAULT_BG) or DEFAULT_BG
-
-        -- Fill (the rounded window region already clips this to a rounded box).
-        local brush = G.CreateSolidBrush(bgRef)
-        U.FillRect(hdc, rc, brush)
-        G.DeleteObject(brush)
-
-        -- 1px+ accent stroke, following the same rounded region. Client rect (w,h) is
-        -- physical; radius + stroke width are logical, so scale them to match.
-        if box and box.strokeColor and (box.strokeWidth or 0) > 0 then
-            local rad = logi(rec.radius)
-            local sw  = math.max(1, logi(box.strokeWidth))
-            local rgn = G.CreateRoundRectRgn(0, 0, w + 1, h + 1, rad, rad)
-            local sb  = G.CreateSolidBrush(toRef(box.strokeColor, DEFAULT_FG))
-            G.FrameRgn(hdc, rgn, sb, sw, sw)
-            G.DeleteObject(sb)
-            G.DeleteObject(rgn)
-        end
-
-        G.SetBkMode(hdc, TRANSPARENT)
-
-        for idx = 2, #els do
-            local el = els[idx]
-            if el.type == "text" and el.frame then
-                local a = alphaOf(el.textColor, 1)
-                if a > 0.01 then
-                    local f   = el.frame
-                    local fr  = ffi.new("RECT")   -- logical frame -> physical device rect
-                    fr.left, fr.top     = logi(f.x), logi(f.y)
-                    fr.right, fr.bottom = logi(f.x + f.w), logi(f.y + f.h)
-
-                    local size = el.textSize or 13
-                    local face = el.textFont or "Segoe UI"
-                    if face == "Helvetica" then face = "Segoe UI" end
-                    -- macOS hs.canvas treats textSize as ~1px/point (and ms_alert sizes
-                    -- its boxes to that), so the logical height is textSize itself; logi()
-                    -- turns it into physical device pixels for the current DPI. Negative
-                    -- asks for character (not cell) height.
-                    local font = G.CreateFontW(
-                        -logi(size), 0, 0, 0, FW_NORMAL,
-                        0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, toWide(face))
-                    local old = G.SelectObject(hdc, font)
-
-                    G.SetTextColor(hdc, blendRef(toRef(el.textColor, DEFAULT_FG), bgRef, a))
-                    local txt = tostring(el.text or "")
-                    local fmt = (#txt <= 3 or not txt:find("%s")) and FMT_GLYPH or FMT_WRAP
-                    if txt:find("\n") then fmt = FMT_WRAP end
-                    U.DrawTextW(hdc, toWide(txt), -1, fr, fmt)
-
-                    G.SelectObject(hdc, old)
-                    G.DeleteObject(font)
-                end
-            end
-        end
-
-        U.EndPaint(hwnd, ps)
-    end
--- END --
-
 -- Shared window procedure (module scope: the GC must never free this cast) --
-    -- A Lua error must never unwind through this FFI boundary (Windows calls it from
-    -- DispatchMessage; a throw is a hard crash), so each body is pcall-guarded.
+    -- No custom WM_PAINT drawing -- the layered content comes from UpdateLayeredWindow.
+    -- WM_PAINT is just validated so Windows stops re-posting it; WM_ERASEBKGND is
+    -- claimed so the window never blanks between frames. Mouse messages fire the cb.
     local wndProc = ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
         local rec = records[keyOf(hwnd)]
         if msg == WM_PAINT then
-            if rec then
-                local ok, err = pcall(paint, rec, hwnd)
-                if not ok and not paintErrLogged then
-                    paintErrLogged = true   -- once: paint fires often, don't spam
-                    io.stderr:write("hs.canvas: paint error (swallowed): " .. tostring(err) .. "\n")
-                end
-            else
-                -- No record yet: still consume the paint so Windows doesn't loop on it.
-                local ps = ffi.new("PAINTSTRUCT"); U.BeginPaint(hwnd, ps); U.EndPaint(hwnd, ps)
-            end
+            local ps = ffi.new("PAINTSTRUCT"); U.BeginPaint(hwnd, ps); U.EndPaint(hwnd, ps)
             return 0
         elseif msg == WM_ERASEBKGND then
-            -- Suppress the default background erase. paint() fills the whole client
-            -- every time, so erasing first only causes a blank flash between frames --
-            -- the flicker seen when an alert repaints (fade/slide/re-show). Claim it.
             return 1
         elseif msg == WM_MOUSEMOVE then
             if rec and rec.mouseCb then
@@ -333,8 +283,8 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
             if rec and rec.mouseCb then
                 pcall(function()
                     local L = tonumber(ffi.cast("uint32_t", lp))
-                    local x = bit.band(L, 0xFFFF);            if x >= 0x8000 then x = x - 0x10000 end
-                    local y = bit.band(bit.rshift(L, 16), 0xFFFF); if y >= 0x8000 then y = y - 0x10000 end
+                    local x = bit.band(L, 0xFFFF);                  if x >= 0x8000 then x = x - 0x10000 end
+                    local y = bit.band(bit.rshift(L, 16), 0xFFFF);  if y >= 0x8000 then y = y - 0x10000 end
                     x, y = unscale(x), unscale(y)   -- physical client -> logical for hit test
                     rec.mouseCb(rec.self, "mouseDown", hitTest(rec, x, y), x, y)
                 end)
@@ -358,10 +308,8 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
         wc.lpfnWndProc   = wndProc
         wc.hInstance     = hInst
         wc.lpszClassName = classBuf
-        -- Standard arrow cursor. Without an hCursor the class inherits none, so Windows
-        -- leaves whatever cursor was last set (often the app-starting/wait cursor) when
-        -- the pointer is over the alert. IDC_ARROW = MAKEINTRESOURCE(32512).
-        wc.hCursor       = U.LoadCursorA(nil, ffi.cast("LPCSTR", 32512))
+        -- Standard arrow cursor (else Windows keeps the last/app-starting cursor over us).
+        wc.hCursor       = U.LoadCursorA(nil, ffi.cast("LPCSTR", 32512))  -- IDC_ARROW
         if U.RegisterClassExA(wc) == 0 then
             error("hs.canvas: RegisterClassExA failed")
         end
@@ -369,11 +317,102 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     end
 -- END --
 
+-- GDI+ scene drawing into a graphics context (physical pixels) --
+    -- Build the rounded-rect path once (fill + stroke share it), inset by the stroke so
+    -- the border stays fully inside the bitmap; then draw each text element.
+    local function addRoundRect(path, x, y, w, h, r)
+        r = math.max(0, math.min(r, math.min(w, h) / 2))
+        local d = r * 2
+        if r <= 0 then
+            -- Degenerate: a plain rectangle via four zero-radius corners.
+            GP.GdipAddPathArc(path, x,       y,       0, 0, 180, 90)
+            GP.GdipAddPathArc(path, x + w,   y,       0, 0, 270, 90)
+            GP.GdipAddPathArc(path, x + w,   y + h,   0, 0,   0, 90)
+            GP.GdipAddPathArc(path, x,       y + h,   0, 0,  90, 90)
+        else
+            GP.GdipAddPathArc(path, x,           y,           d, d, 180, 90)
+            GP.GdipAddPathArc(path, x + w - d,   y,           d, d, 270, 90)
+            GP.GdipAddPathArc(path, x + w - d,   y + h - d,   d, d,   0, 90)
+            GP.GdipAddPathArc(path, x,           y + h - d,   d, d,  90, 90)
+        end
+        GP.GdipClosePathFigure(path)
+    end
+
+    local function drawScene(gfx, rec, phW, phH)
+        GP.GdipSetSmoothingMode(gfx, SMOOTHING_ANTIALIAS)
+        GP.GdipSetTextRenderingHint(gfx, TEXT_ANTIALIAS)
+
+        local els = rec.elements
+        local box = els[1]
+
+        -- Rounded rect: fill, then 1px+ accent stroke, inset so nothing clips.
+        local sw   = box and box.strokeColor and math.max(1, logi(box.strokeWidth or 0)) or 0
+        local m    = math.max(1, sw / 2)
+        local rx   = logi(rec.radius)
+        local path = ffi.new("void*[1]")
+        GP.GdipCreatePath(FILLMODE_ALTERNATE, path)
+        addRoundRect(path[0], m, m, phW - 2 * m, phH - 2 * m, rx - m)
+
+        if box then
+            local brush = ffi.new("void*[1]")
+            GP.GdipCreateSolidFill(toArgb(box.fillColor, DEFAULT_BG_ARGB), brush)
+            GP.GdipFillPath(gfx, brush[0], path[0])
+            GP.GdipDeleteBrush(brush[0])
+
+            if box.strokeColor and sw > 0 then
+                local pen = ffi.new("void*[1]")
+                GP.GdipCreatePen1(toArgb(box.strokeColor, DEFAULT_FG_ARGB), sw, UNIT_PIXEL, pen)
+                GP.GdipDrawPath(gfx, pen[0], path[0])
+                GP.GdipDeletePen(pen[0])
+            end
+        end
+        GP.GdipDeletePath(path[0])
+
+        -- One centred string format, reused across the text elements.
+        local fmt = ffi.new("void*[1]")
+        GP.GdipCreateStringFormat(0, 0, fmt)
+        GP.GdipSetStringFormatAlign(fmt[0], STR_ALIGN_CENTER)      -- horizontal
+        GP.GdipSetStringFormatLineAlign(fmt[0], STR_ALIGN_CENTER)  -- vertical
+
+        for idx = 2, #els do
+            local el = els[idx]
+            if el.type == "text" and el.frame and (el.text or "") ~= "" then
+                local argb = toArgb(el.textColor, DEFAULT_FG_ARGB)
+                if math.floor(argb / 0x1000000) > 1 then   -- alpha byte > 1: worth drawing
+                    local face = el.textFont or "Segoe UI"
+                    if face == "Helvetica" then face = "Segoe UI" end
+
+                    local family = ffi.new("void*[1]")
+                    if GP.GdipCreateFontFamilyFromName(toWide(face), nil, family) ~= 0 then
+                        GP.GdipGetGenericFontFamilySansSerif(family)
+                    end
+                    local font = ffi.new("void*[1]")
+                    GP.GdipCreateFont(family[0], logi(el.textSize or 13),
+                                      FONTSTYLE_REGULAR, UNIT_PIXEL, font)
+
+                    local brush = ffi.new("void*[1]")
+                    GP.GdipCreateSolidFill(argb, brush)
+
+                    local f  = el.frame
+                    local rc = ffi.new("GpRectF")
+                    rc.X, rc.Y     = logi(f.x), logi(f.y)
+                    rc.Width       = logi(f.w)
+                    rc.Height      = logi(f.h)
+                    GP.GdipDrawString(gfx, toWide(el.text), -1, font[0], rc, fmt[0], brush[0])
+
+                    GP.GdipDeleteBrush(brush[0])
+                    GP.GdipDeleteFont(font[0])
+                    GP.GdipDeleteFontFamily(family[0])
+                end
+            end
+        end
+        GP.GdipDeleteStringFormat(fmt[0])
+    end
+-- END --
+
 local canvas = {}
 
 -- windowLevels / windowBehaviors: numeric tables mudscript indexes + OR-combines --
-    -- Values mirror NSWindowLevel / NSWindowCollectionBehavior ordering; on Win32
-    -- only the relative magnitude matters (every alert level maps to "topmost").
     canvas.windowLevels = {
         normal = 0, floating = 3, tornOffMenu = 3, modalPanel = 8, utility = 19,
         dock = 20, mainMenu = 24, status = 25, popUpMenu = 101, overlay = 102,
@@ -391,44 +430,79 @@ local canvas = {}
     local Canvas = {}
     Canvas.__index = Canvas
 
-    -- Effective whole-window alpha = animated alpha * the box fill's own alpha, the
-    -- best a single layered alpha can do (see FIDELITY NOTES).
-    local function applyAlpha(self)
-        if self._closed or not self._hwnd then return end
-        local a = math.floor(self._alpha * self._fillAlpha * 255 + 0.5)
-        if a < 0 then a = 0 elseif a > 255 then a = 255 end
-        U.SetLayeredWindowAttributes(self._hwnd, 0, a, LWA_ALPHA)
+    -- Push the current DIB to the window via UpdateLayeredWindow with the given
+    -- whole-window constant alpha. Reused by render (after a redraw), :alpha, and a
+    -- position-only :frame (all without re-drawing the bitmap).
+    local function push(self)
+        if self._closed or not self._hwnd or not self._memDC then return end
+        local pt   = ffi.new("POINT"); pt.x = logi(self._frame.x); pt.y = logi(self._frame.y)
+        local sz   = ffi.new("SIZE");  sz.cx = self._dibW;        sz.cy = self._dibH
+        local src  = ffi.new("POINT"); src.x = 0; src.y = 0
+        local bf   = ffi.new("BLENDFUNCTION")
+        bf.BlendOp             = AC_SRC_OVER
+        bf.BlendFlags          = 0
+        bf.SourceConstantAlpha = math.max(0, math.min(255, math.floor(self._alpha * 255 + 0.5)))
+        bf.AlphaFormat         = AC_SRC_ALPHA
+        U.UpdateLayeredWindow(self._hwnd, nil, pt, sz, self._memDC, src, 0, bf, ULW_ALPHA)
     end
 
-    local function invalidate(self)
-        -- bErase=false: paint() repaints the whole client, so no erase pass (which would
-        -- blank the window first and flicker). WM_ERASEBKGND is also claimed above.
-        if not self._closed and self._hwnd then U.InvalidateRect(self._hwnd, nil, false) end
+    -- (Re)draw the element scene into a physical-size DIB, then push it. Rebuilds the
+    -- DIB only when the physical size changes. GDI+ failures are swallowed (never crash
+    -- the pump) and logged once.
+    local function render(self)
+        if self._closed or not self._hwnd or not gdiplusOk then return end
+        local phW = math.max(1, logi(self._frame.w))
+        local phH = math.max(1, logi(self._frame.h))
+
+        local ok, err = pcall(function()
+            if not self._memDC or self._dibW ~= phW or self._dibH ~= phH then
+                if self._memDC then
+                    if self._hbitmap then G.DeleteObject(self._hbitmap) end
+                    G.DeleteDC(self._memDC)
+                end
+                self._memDC = G.CreateCompatibleDC(nil)
+                local bmi = ffi.new("BITMAPINFOHEADER")
+                bmi.biSize        = ffi.sizeof("BITMAPINFOHEADER")
+                bmi.biWidth       = phW
+                bmi.biHeight      = -phH        -- negative: top-down
+                bmi.biPlanes      = 1
+                bmi.biBitCount    = 32
+                bmi.biCompression = BI_RGB
+                local bits = ffi.new("void*[1]")
+                self._hbitmap = G.CreateDIBSection(self._memDC, bmi, DIB_RGB_COLORS, bits, nil, 0)
+                self._bits    = bits[0]
+                G.SelectObject(self._memDC, self._hbitmap)
+                self._dibW, self._dibH = phW, phH
+            end
+
+            -- Draw into the DIB memory as a premultiplied GDI+ bitmap (shares scan0).
+            local gpbmp = ffi.new("void*[1]")
+            GP.GdipCreateBitmapFromScan0(phW, phH, phW * 4, PF_32BPP_PARGB,
+                                         ffi.cast("unsigned char*", self._bits), gpbmp)
+            local gfx = ffi.new("void*[1]")
+            GP.GdipGetImageGraphicsContext(gpbmp[0], gfx)
+            GP.GdipGraphicsClear(gfx[0], 0)             -- fully transparent
+            drawScene(gfx[0], self._rec, phW, phH)
+            GP.GdipDeleteGraphics(gfx[0])
+            GP.GdipDisposeImage(gpbmp[0])               -- flushes into the DIB
+        end)
+        if not ok and not renderErrLogged then
+            renderErrLogged = true
+            io.stderr:write("hs.canvas: render error (swallowed): " .. tostring(err) .. "\n")
+        end
+
+        push(self)
     end
 
-    -- Rounded region matching the current size + the box radius; call after any
-    -- create or resize so corners stay rounded. Frame + radius are logical -> scale to
-    -- the physical window pixels the region is measured in.
-    local function applyRegion(self)
-        if self._closed or not self._hwnd then return end
-        local f = self._frame
-        U.SetWindowRgn(self._hwnd,
-            G.CreateRoundRectRgn(0, 0, logi(f.w) + 1, logi(f.h) + 1,
-                                 logi(self._rec.radius), logi(self._rec.radius)), true)
-    end
-
-    -- level(n): Win32 has one topmost band, so n>=0 means "top-most" (the only
-    -- distinction mudscript needs). Stored so the keep-on-top tick knows whether to
-    -- run; the actual z-order is applied/held from show() onward.
     function Canvas:level(n)
         if n == nil then return self._level end
         self._level = n
         return self
     end
-    function Canvas:behavior(_) return self end      -- no Spaces concept on Win32
+    function Canvas:behavior(_) return self end
 
-    -- Keep-on-top tick: re-front a top-most canvas every FRONT_MS so a shell
-    -- :bringToFront can't leave it buried. Idempotent start; stopped by hide/delete.
+    -- Keep-on-top tick: re-front a top-most canvas every FRONT_MS so the shell's
+    -- :bringToFront can't bury it (both live in the one Win32 topmost band).
     local function startKeepFront(self)
         if self._frontTimer or (self._level and self._level < 0) then return end
         self._frontTimer = timer.doEvery(FRONT_MS, function()
@@ -436,7 +510,6 @@ local canvas = {}
             U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_FRONT)
         end)
     end
-
     local function stopKeepFront(self)
         if self._frontTimer then self._frontTimer:stop(); self._frontTimer = nil end
     end
@@ -444,7 +517,7 @@ local canvas = {}
     function Canvas:alpha(a)
         if a == nil then return self._alpha end
         self._alpha = a
-        applyAlpha(self)
+        push(self)          -- constant-alpha change only; no redraw
         return self
     end
 
@@ -454,9 +527,7 @@ local canvas = {}
         local resized = (r.w and r.w ~= f.w) or (r.h and r.h ~= f.h)
         f.x = r.x or f.x; f.y = r.y or f.y; f.w = r.w or f.w; f.h = r.h or f.h
         if not self._closed and self._hwnd then
-            U.MoveWindow(self._hwnd, logi(f.x), logi(f.y), logi(f.w), logi(f.h), true)
-            if resized then applyRegion(self) end
-            invalidate(self)
+            if resized then render(self) else push(self) end   -- move-only just re-pushes
         end
         return self
     end
@@ -470,27 +541,21 @@ local canvas = {}
                 if el.roundedRectRadii and el.roundedRectRadii.xRadius then
                     self._rec.radius = el.roundedRectRadii.xRadius
                 end
-                self._fillAlpha = alphaOf(el.fillColor, 1)
             end
         end
-        applyAlpha(self)
-        invalidate(self)
+        if self._hwnd then render(self) end
         return self
     end
 
-    -- elementAttribute(i, key, value): mutate one element in place and repaint.
-    -- Setter-only (the form mudscript uses); returns self.
+    -- elementAttribute(i, key, value): mutate one element in place and re-render.
     function Canvas:elementAttribute(i, key, value)
         local el = self._rec.elements[i]
         if el then
             el[key] = value
-            if i == 1 and key == "fillColor" then
-                self._fillAlpha = alphaOf(value, 1); applyAlpha(self)
-            end
             if i == 1 and key == "roundedRectRadii" and value and value.xRadius then
-                self._rec.radius = value.xRadius; applyRegion(self)
+                self._rec.radius = value.xRadius
             end
-            invalidate(self)
+            if self._hwnd then render(self) end
         end
         return self
     end
@@ -506,27 +571,20 @@ local canvas = {}
         local f = self._frame
         if not self._hwnd then
             local hwnd = U.CreateWindowExA(EX_STYLE, classBuf, "", WS_POPUP,
-                logi(f.x), logi(f.y), logi(f.w), logi(f.h),
-                nil, nil, hInst, nil)
+                logi(f.x), logi(f.y), logi(f.w), logi(f.h), nil, nil, hInst, nil)
             if hwnd == nil then error("hs.canvas: CreateWindowExA failed") end
-            self._hwnd    = hwnd
-            self._key     = keyOf(hwnd)
+            self._hwnd     = hwnd
+            self._key      = keyOf(hwnd)
             self._rec.self = self
             records[self._key] = self._rec
-            applyRegion(self)
         end
-        applyAlpha(self)
+        render(self)   -- draw + push BEFORE showing, so the first frame is never garbage
         U.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
         U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_FRONT)
-        startKeepFront(self)   -- hold the top of the band against the shell
-        -- Paint synchronously before the first composite, so the window is never shown
-        -- as an unpainted (garbage) frame -- the flash seen when an alert first appears.
-        invalidate(self)
-        U.UpdateWindow(self._hwnd)
+        startKeepFront(self)
         return self
     end
 
-    -- Legacy geometry getters some Hammerspoon code uses; harmless to keep.
     function Canvas:topLeft(p)
         if p == nil then return { x = self._frame.x, y = self._frame.y } end
         return self:frame({ x = p.x, y = p.y })
@@ -546,6 +604,11 @@ local canvas = {}
         if self._closed then return self end
         self._closed = true
         stopKeepFront(self)
+        if self._memDC then
+            if self._hbitmap then G.DeleteObject(self._hbitmap) end
+            G.DeleteDC(self._memDC)
+            self._memDC, self._hbitmap, self._bits = nil, nil, nil
+        end
         if self._hwnd then
             records[self._key] = nil
             U.DestroyWindow(self._hwnd)
@@ -558,17 +621,20 @@ local canvas = {}
 -- Constructors --
     function canvas.new(rect)
         rect = rect or {}
-        local self = setmetatable({
-            _frame     = { x = rect.x or 0, y = rect.y or 0, w = rect.w or 0, h = rect.h or 0 },
-            _alpha     = 1,
-            _fillAlpha = 1,
-            _level     = 0,          -- >=0 => top-most (default); drives keep-on-top
-            _closed    = false,
-            _hwnd      = nil,
+        return setmetatable({
+            _frame      = { x = rect.x or 0, y = rect.y or 0, w = rect.w or 0, h = rect.h or 0 },
+            _alpha      = 1,
+            _level      = 0,          -- >=0 => top-most (default); drives keep-on-top
+            _closed     = false,
+            _hwnd       = nil,
             _frontTimer = nil,
-            _rec       = { elements = {}, radius = DEFAULT_RADIUS, mouseCb = nil, tracking = false },
+            _memDC      = nil,
+            _hbitmap    = nil,
+            _bits       = nil,
+            _dibW       = nil,
+            _dibH       = nil,
+            _rec        = { elements = {}, radius = DEFAULT_RADIUS, mouseCb = nil, tracking = false },
         }, Canvas)
-        return self
     end
 
     function canvas.elementCount() return 0 end
