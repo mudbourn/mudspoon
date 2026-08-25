@@ -264,7 +264,7 @@
     local ENABLE_WEBVIEW = os.getenv("MUDSPOON_WEBVIEW") == "1"
 
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
-        "pasteboard", "urlevent", "http", "task", "menubar" }
+        "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -319,9 +319,9 @@
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
         "window.filter",
-        "uielement", "axuielement", "dialog", "focus",
-        "audiodevice", "sound", "processInfo",
-        "chooser", "notify",
+        "uielement", "axuielement", "focus",
+        "audiodevice", "processInfo",
+        "chooser",
     }
 
     -- Webview: stub it UNLESS MUDSPOON_WEBVIEW=1 wired the real module above. The
