@@ -263,7 +263,8 @@
     -- last COM step reached before any crash (paired with the SEH exception-code line).
     local ENABLE_WEBVIEW = os.getenv("MUDSPOON_WEBVIEW") == "1"
 
-    local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application" }
+    local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
+        "pasteboard", "urlevent", "http", "task", "menubar" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -317,9 +318,9 @@
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
-        "window.filter", "menubar",
-        "uielement", "axuielement", "dialog", "focus", "http", "task",
-        "audiodevice", "urlevent", "sound", "pasteboard", "processInfo",
+        "window.filter",
+        "uielement", "axuielement", "dialog", "focus",
+        "audiodevice", "sound", "processInfo",
         "chooser", "notify",
     }
 

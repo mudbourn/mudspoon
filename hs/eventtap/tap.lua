@@ -20,7 +20,9 @@ local host = require("hs.foundation")
 local eventtap = {}
 
 -- Which event types route to the keyboard hook; everything else is a mouse type.
-local KEY_TYPES = { keyDown = true, keyUp = true }
+-- flagsChanged is emitted by the key hook (modifier transitions), so it must route
+-- there too — otherwise a tap on it subscribes to the mouse hook and never fires.
+local KEY_TYPES = { keyDown = true, keyUp = true, flagsChanged = true }
 
 -- Eventtap object --
     local Tap = {}

@@ -118,6 +118,18 @@ DWORD   MsgWaitForMultipleObjects(DWORD, const HANDLE*, BOOL, DWORD, DWORD);
     local VK_RWIN        = 0x5C
     local HIGH_BIT       = 0x8000
 
+    -- vkCodes that carry no character of their own, only a modifier state. A key
+    -- event on any of these is emitted as "flagsChanged" (hs parity), never
+    -- keyDown/keyUp. Covers the generic (0x10-0x12) and L/R-specific vkCodes the
+    -- LL hook actually delivers (0xA0-0xA5), plus the Win keys.
+    local MODIFIER_VK = {
+        [0x10] = true, [0x11] = true, [0x12] = true,          -- shift / control / alt
+        [0xA0] = true, [0xA1] = true,                         -- L/R shift
+        [0xA2] = true, [0xA3] = true,                         -- L/R control
+        [0xA4] = true, [0xA5] = true,                         -- L/R alt (menu)
+        [0x5B] = true, [0x5C] = true,                         -- L/R win
+    }
+
     local LLKHF_INJECTED = 0x10  -- low-level hook flags: event was synthesized
     local LLMHF_INJECTED = 0x01
 
@@ -281,6 +293,22 @@ local host = {
         [WM_KEYUP]      = "keyUp",    [WM_SYSKEYUP]   = "keyUp",
     }
 
+    -- Which button each down/up message owns, and the drag type to emit while it
+    -- is held. Highest-priority held button (left > right > other) names the drag,
+    -- mirroring hs, which reports one *Dragged type per move.
+    local BTN_DOWN = { [WM_LBUTTONDOWN] = 0, [WM_RBUTTONDOWN] = 1, [WM_MBUTTONDOWN] = 2 }
+    local BTN_UP   = { [WM_LBUTTONUP]   = 0, [WM_RBUTTONUP]   = 1, [WM_MBUTTONUP]   = 2 }
+    local DRAG_TYPE = { [0] = "leftMouseDragged", [1] = "rightMouseDragged", [2] = "otherMouseDragged" }
+    local btnHeld = { [0] = false, [1] = false, [2] = false }
+
+    -- The held button (lowest number = highest priority) driving a drag, or nil.
+    local function dragButton()
+        if btnHeld[0] then return 0 end
+        if btnHeld[1] then return 1 end
+        if btnHeld[2] then return 2 end
+        return nil
+    end
+
     -- mouse message -> {type, buttonNumber}
     local MOUSE_TYPE = {
         [WM_MOUSEMOVE]   = { "mouseMoved" },
@@ -319,9 +347,14 @@ local host = {
                 if t then
                     local kb    = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
                     local extra = tonumber(kb.dwExtraInfo)
+                    local vk    = tonumber(kb.vkCode)
+                    -- A modifier key transition is a flagsChanged, not keyDown/keyUp
+                    -- (hs contract). currentFlags() reads real-time async state, so
+                    -- by the time this fires the pressed/released bit is settled.
+                    if MODIFIER_VK[vk] then t = "flagsChanged" end
                     local ev = host.newEvent{
                         type    = t,
-                        keyCode = tonumber(kb.vkCode),
+                        keyCode = vk,
                         flags   = currentFlags(),
                         props   = {
                             scanCode = tonumber(kb.scanCode),
@@ -343,20 +376,31 @@ local host = {
         if not mouseProc then
         mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
             if nCode >= 0 then
-                local m = MOUSE_TYPE[tonumber(wParam)]
+                local wp = tonumber(wParam)
+                -- Track button state before typing the event so a move that arrives
+                -- in the same held-button window is seen as a drag.
+                local dn = BTN_DOWN[wp]; if dn then btnHeld[dn] = true  end
+                local up = BTN_UP[wp];   if up then btnHeld[up] = false end
+                local m = MOUSE_TYPE[wp]
                 if m then
                     local ms    = ffi.cast("MSLLHOOKSTRUCT*", lParam)
                     local extra = tonumber(ms.dwExtraInfo)
                     -- WM_MOUSEWHEEL packs the signed delta in the high word of mouseData.
                     local wheel = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
+                    local evType, evButton = m[1], m[2]
+                    -- A move with a button held is a drag, named by that button.
+                    if wp == WM_MOUSEMOVE then
+                        local db = dragButton()
+                        if db then evType, evButton = DRAG_TYPE[db], db end
+                    end
                     local ev = host.newEvent{
-                        type    = m[1],
+                        type    = evType,
                         keyCode = nil,
                         flags   = currentFlags(),
                         props   = {
                             x            = tonumber(ms.pt.x),
                             y            = tonumber(ms.pt.y),
-                            buttonNumber = m[2],
+                            buttonNumber = evButton,
                             mouseData    = wheel,
                             injected     = bit.band(ms.flags, LLMHF_INJECTED) ~= 0,
                             extra        = extra,

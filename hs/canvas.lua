@@ -1,12 +1,13 @@
--- hs.canvas  (Win32 per-pixel-alpha backend for the element subset mudscript draws) --
-    -- Hammerspoon's hs.canvas is a full vector surface; mudscript uses a narrow slice
-    -- -- ms_alert draws each toast as ONE canvas: a rounded, translucent rectangle
-    -- (fill + 1px accent stroke) plus two centred text elements (the message and a
-    -- close glyph). This implements that slice as a borderless, layered, top-most
-    -- popup whose pixels come from UpdateLayeredWindow -- a 32bpp premultiplied bitmap
-    -- drawn ANTI-ALIASED with GDI+. That gives smooth rounded corners and genuinely
-    -- transparent corners (no clip-to-background white), plus true per-pixel alpha, so
-    -- the fill translucency and the close-glyph fade are real, not faked.
+-- hs.canvas  (Win32 per-pixel-alpha backend, general element set) --
+    -- Hammerspoon's hs.canvas is a full vector surface. This is a borderless, layered,
+    -- top-most popup whose pixels come from UpdateLayeredWindow -- a 32bpp premultiplied
+    -- bitmap drawn ANTI-ALIASED with GDI+. Smooth rounded corners, genuinely transparent
+    -- corners (no clip-to-background white), and true per-pixel alpha (fill translucency
+    -- and glyph fades are real, not faked).
+    --
+    -- The load-bearing consumer is ms_alert (a rounded translucent rectangle + centred
+    -- text, rig-verified), but the element set is general -- rectangle/oval/segments/
+    -- text/image -- so plugin UIs can draw arbitrary scenes, not just toasts.
     --
     -- Contract mudscript relies on (see mac/lib/ms_alert.lua):
     --   hs.canvas.windowLevels / .windowBehaviors  -- numeric tables read at load
@@ -19,9 +20,14 @@
     --                            "mouseEnter"|"mouseExit"|"mouseDown"
     --     :show() :delete()   -- delete is idempotent
     --
-    -- Element specs honoured:
-    --   rectangle: fillColor, strokeColor, strokeWidth, roundedRectRadii.xRadius
-    --   text:      text, textFont, textSize, textColor, textAlignment, frame{x,y,w,h}
+    -- Element specs honoured (all share action="fill"|"stroke"|"strokeAndFill", default
+    -- strokeAndFill, plus fillColor/strokeColor/strokeWidth where they apply):
+    --   rectangle: roundedRectRadii.xRadius; frame OR frame-less (fills the window)
+    --   oval:      inscribed in frame (aliases: circle, ellipse)
+    --   segments:  coordinates {{x,y},...}; closed=true -> fillable polygon (alias: line)
+    --   text:      text, textFont, textSize, textColor, textAlignment
+    --              (left|center|right|natural|justified), frame{x,y,w,h}
+    --   image:     el.image = a file-path string (or a table with .path); frame or full
     -- Colours are Hammerspoon tables {red,green,blue,alpha} in 0..1.
     --
     -- RENDER MODEL: render() (re)builds a top-down 32bpp DIB the size of the window,
@@ -87,6 +93,7 @@ typedef struct {
     DWORD biClrUsed; DWORD biClrImportant;
 } BITMAPINFOHEADER;
 typedef struct { float X; float Y; float Width; float Height; } GpRectF;
+typedef struct { float X; float Y; } GpPointF;
 typedef struct { unsigned int GdiplusVersion; void* DebugEventCallback; int Suppress1; int Suppress2; } GpStartupInput;
 
 /* --- GDI+ flat API (gdiplus) --- */
@@ -101,6 +108,8 @@ int GdipGraphicsClear(void*, unsigned int);
 int GdipCreatePath(int, void**);
 int GdipDeletePath(void*);
 int GdipAddPathArc(void*, float, float, float, float, float, float);
+int GdipAddPathEllipse(void*, float, float, float, float);
+int GdipAddPathLine2(void*, const GpPointF*, int);
 int GdipClosePathFigure(void*);
 int GdipCreateSolidFill(unsigned int, void**);
 int GdipDeleteBrush(void*);
@@ -118,6 +127,8 @@ int GdipDeleteStringFormat(void*);
 int GdipSetStringFormatAlign(void*, int);
 int GdipSetStringFormatLineAlign(void*, int);
 int GdipDrawString(void*, const unsigned short*, int, void*, const GpRectF*, void*, void*);
+int GdipLoadImageFromFile(const unsigned short*, void**);
+int GdipDrawImageRect(void*, void*, float, float, float, float);
 ]]
 -- END --
 
@@ -160,7 +171,14 @@ int GdipDrawString(void*, const unsigned short*, int, void*, const GpRectF*, voi
     local UNIT_PIXEL            = 2
     local FILLMODE_ALTERNATE    = 0
     local FONTSTYLE_REGULAR     = 0
+    local STR_ALIGN_NEAR        = 0   -- left / top
     local STR_ALIGN_CENTER      = 1
+    local STR_ALIGN_FAR         = 2   -- right / bottom
+    -- Hammerspoon textAlignment string -> GDI+ StringAlignment (horizontal).
+    local TEXT_ALIGN = {
+        left = STR_ALIGN_NEAR, natural = STR_ALIGN_NEAR, justified = STR_ALIGN_NEAR,
+        center = STR_ALIGN_CENTER, right = STR_ALIGN_FAR,
+    }
     local PF_32BPP_PARGB        = 0x000E200B   -- PixelFormat32bppPARGB (premultiplied)
 
     local DEFAULT_RADIUS    = 20
@@ -338,75 +356,157 @@ int GdipDrawString(void*, const unsigned short*, int, void*, const GpRectF*, voi
         GP.GdipClosePathFigure(path)
     end
 
+    -- Physical-pixel frame for an element; a frame-less element covers the window.
+    local function physFrame(el, phW, phH)
+        local f = el.frame
+        if not f then return 0, 0, phW, phH end
+        return logi(f.x), logi(f.y), logi(f.w), logi(f.h)
+    end
+
+    -- Fill and/or stroke a prebuilt path per the element's action. Hammerspoon's
+    -- default action is "strokeAndFill"; a colour is only drawn when it is present.
+    local function fillStrokePath(gfx, el, path)
+        local action = el.action or "strokeAndFill"
+        if (action == "fill" or action == "strokeAndFill") and el.fillColor then
+            local brush = ffi.new("void*[1]")
+            GP.GdipCreateSolidFill(toArgb(el.fillColor, DEFAULT_BG_ARGB), brush)
+            GP.GdipFillPath(gfx, brush[0], path)
+            GP.GdipDeleteBrush(brush[0])
+        end
+        if (action == "stroke" or action == "strokeAndFill") and el.strokeColor then
+            local sw  = math.max(1, logi(el.strokeWidth or 1))
+            local pen = ffi.new("void*[1]")
+            GP.GdipCreatePen1(toArgb(el.strokeColor, DEFAULT_FG_ARGB), sw, UNIT_PIXEL, pen)
+            GP.GdipDrawPath(gfx, pen[0], path)
+            GP.GdipDeletePen(pen[0])
+        end
+    end
+
+    -- rectangle (rounded via roundedRectRadii.xRadius). A frame-less rectangle fills
+    -- the window, inset by half its stroke so the border stays inside the bitmap --
+    -- this is the ms_alert background path, byte-for-byte the prior behaviour.
+    local function drawRect(gfx, el, phW, phH, rec)
+        local sw = el.strokeColor and math.max(1, logi(el.strokeWidth or 1)) or 0
+        local x, y, w, h, radius
+        if not el.frame then
+            local inset = math.max(1, sw / 2)
+            x, y, w, h = inset, inset, phW - 2 * inset, phH - 2 * inset
+            local r = (el.roundedRectRadii and el.roundedRectRadii.xRadius) or rec.radius
+            radius = logi(r) - inset
+        else
+            x, y, w, h = physFrame(el, phW, phH)
+            radius = (el.roundedRectRadii and el.roundedRectRadii.xRadius)
+                     and logi(el.roundedRectRadii.xRadius) or 0
+        end
+        local path = ffi.new("void*[1]")
+        GP.GdipCreatePath(FILLMODE_ALTERNATE, path)
+        addRoundRect(path[0], x, y, w, h, radius)
+        fillStrokePath(gfx, el, path[0])
+        GP.GdipDeletePath(path[0])
+    end
+
+    -- oval / circle: an ellipse inscribed in the element frame.
+    local function drawOval(gfx, el, phW, phH)
+        local x, y, w, h = physFrame(el, phW, phH)
+        local path = ffi.new("void*[1]")
+        GP.GdipCreatePath(FILLMODE_ALTERNATE, path)
+        GP.GdipAddPathEllipse(path[0], x, y, w, h)
+        fillStrokePath(gfx, el, path[0])
+        GP.GdipDeletePath(path[0])
+    end
+
+    -- segments: a polyline through coordinates {{x,y},...} (logical). closed=true makes
+    -- it a fillable polygon; otherwise it is stroked open.
+    local function drawSegments(gfx, el)
+        local pts = el.coordinates
+        if type(pts) ~= "table" or #pts < 2 then return end
+        local arr = ffi.new("GpPointF[?]", #pts)
+        for i = 1, #pts do
+            arr[i - 1].X = logi(pts[i].x or 0)
+            arr[i - 1].Y = logi(pts[i].y or 0)
+        end
+        local path = ffi.new("void*[1]")
+        GP.GdipCreatePath(FILLMODE_ALTERNATE, path)
+        GP.GdipAddPathLine2(path[0], arr, #pts)
+        if el.closed then GP.GdipClosePathFigure(path[0]) end
+        fillStrokePath(gfx, el, path[0])
+        GP.GdipDeletePath(path[0])
+    end
+
+    -- text: one string, horizontally aligned per textAlignment, vertically centred in
+    -- its frame. mudspoon keeps the vertical centre (Hammerspoon anchors text at the
+    -- top) so the rig-verified alert layout is preserved; alert frames are line-tight so
+    -- the difference is nil there, and centred-in-box is the sane default for plugin UIs.
+    local function drawText(gfx, el)
+        if not el.frame or (el.text or "") == "" then return end
+        local argb = toArgb(el.textColor, DEFAULT_FG_ARGB)
+        if math.floor(argb / 0x1000000) <= 1 then return end   -- alpha ~0: nothing to draw
+
+        local face = el.textFont or "Segoe UI"
+        if face == "Helvetica" then face = "Segoe UI" end
+        local family = ffi.new("void*[1]")
+        if GP.GdipCreateFontFamilyFromName(toWide(face), nil, family) ~= 0 then
+            GP.GdipGetGenericFontFamilySansSerif(family)
+        end
+        local font = ffi.new("void*[1]")
+        GP.GdipCreateFont(family[0], logi(el.textSize or 13), FONTSTYLE_REGULAR, UNIT_PIXEL, font)
+
+        local fmt = ffi.new("void*[1]")
+        GP.GdipCreateStringFormat(0, 0, fmt)
+        GP.GdipSetStringFormatAlign(fmt[0], TEXT_ALIGN[el.textAlignment] or STR_ALIGN_NEAR)
+        GP.GdipSetStringFormatLineAlign(fmt[0], STR_ALIGN_CENTER)
+
+        local brush = ffi.new("void*[1]")
+        GP.GdipCreateSolidFill(argb, brush)
+
+        local f  = el.frame
+        local rc = ffi.new("GpRectF")
+        rc.X, rc.Y          = logi(f.x), logi(f.y)
+        rc.Width, rc.Height = logi(f.w), logi(f.h)
+        GP.GdipDrawString(gfx, toWide(el.text), -1, font[0], rc, fmt[0], brush[0])
+
+        GP.GdipDeleteBrush(brush[0])
+        GP.GdipDeleteStringFormat(fmt[0])
+        GP.GdipDeleteFont(font[0])
+        GP.GdipDeleteFontFamily(family[0])
+    end
+
+    -- image: draw a file into the element frame. el.image is a file path (string) or a
+    -- table carrying .path (so an hs.image.imageFromPath-style value works). Loaded
+    -- images are cached for the process life -- GDI+ owns the handle; never disposed.
+    local imageCache = {}
+    local function loadImage(pathStr)
+        if imageCache[pathStr] ~= nil then return imageCache[pathStr] end
+        local img = ffi.new("void*[1]")
+        local ok  = GP.GdipLoadImageFromFile(toWide(pathStr), img) == 0 and img[0] ~= nil
+        imageCache[pathStr] = ok and img or false   -- cache the box: anchors the pointer
+        return imageCache[pathStr]
+    end
+    local function drawImage(gfx, el, phW, phH)
+        local src     = el.image
+        local pathStr = (type(src) == "table" and src.path)
+                        or (type(src) == "string" and src) or nil
+        if not pathStr then return end
+        local box = loadImage(pathStr)
+        if not box then return end
+        local x, y, w, h = physFrame(el, phW, phH)
+        GP.GdipDrawImageRect(gfx, box[0], x, y, w, h)
+    end
+
+    -- Draw every element in append order; unknown types are skipped. Missing colours
+    -- default to the deepslate/parchment alert palette.
     local function drawScene(gfx, rec, phW, phH)
         GP.GdipSetSmoothingMode(gfx, SMOOTHING_ANTIALIAS)
         GP.GdipSetTextRenderingHint(gfx, TEXT_ANTIALIAS)
-
-        local els = rec.elements
-        local box = els[1]
-
-        -- Rounded rect: fill, then 1px+ accent stroke, inset so nothing clips.
-        local sw   = box and box.strokeColor and math.max(1, logi(box.strokeWidth or 0)) or 0
-        local m    = math.max(1, sw / 2)
-        local rx   = logi(rec.radius)
-        local path = ffi.new("void*[1]")
-        GP.GdipCreatePath(FILLMODE_ALTERNATE, path)
-        addRoundRect(path[0], m, m, phW - 2 * m, phH - 2 * m, rx - m)
-
-        if box then
-            local brush = ffi.new("void*[1]")
-            GP.GdipCreateSolidFill(toArgb(box.fillColor, DEFAULT_BG_ARGB), brush)
-            GP.GdipFillPath(gfx, brush[0], path[0])
-            GP.GdipDeleteBrush(brush[0])
-
-            if box.strokeColor and sw > 0 then
-                local pen = ffi.new("void*[1]")
-                GP.GdipCreatePen1(toArgb(box.strokeColor, DEFAULT_FG_ARGB), sw, UNIT_PIXEL, pen)
-                GP.GdipDrawPath(gfx, pen[0], path[0])
-                GP.GdipDeletePen(pen[0])
+        for _, el in ipairs(rec.elements) do
+            local t = el.type
+            if     t == "rectangle" then drawRect(gfx, el, phW, phH, rec)
+            elseif t == "oval" or t == "circle" or t == "ellipse" then drawOval(gfx, el, phW, phH)
+            elseif t == "segments" or t == "line" then drawSegments(gfx, el)
+            elseif t == "text"     then drawText(gfx, el)
+            elseif t == "image"    then drawImage(gfx, el, phW, phH)
             end
         end
-        GP.GdipDeletePath(path[0])
-
-        -- One centred string format, reused across the text elements.
-        local fmt = ffi.new("void*[1]")
-        GP.GdipCreateStringFormat(0, 0, fmt)
-        GP.GdipSetStringFormatAlign(fmt[0], STR_ALIGN_CENTER)      -- horizontal
-        GP.GdipSetStringFormatLineAlign(fmt[0], STR_ALIGN_CENTER)  -- vertical
-
-        for idx = 2, #els do
-            local el = els[idx]
-            if el.type == "text" and el.frame and (el.text or "") ~= "" then
-                local argb = toArgb(el.textColor, DEFAULT_FG_ARGB)
-                if math.floor(argb / 0x1000000) > 1 then   -- alpha byte > 1: worth drawing
-                    local face = el.textFont or "Segoe UI"
-                    if face == "Helvetica" then face = "Segoe UI" end
-
-                    local family = ffi.new("void*[1]")
-                    if GP.GdipCreateFontFamilyFromName(toWide(face), nil, family) ~= 0 then
-                        GP.GdipGetGenericFontFamilySansSerif(family)
-                    end
-                    local font = ffi.new("void*[1]")
-                    GP.GdipCreateFont(family[0], logi(el.textSize or 13),
-                                      FONTSTYLE_REGULAR, UNIT_PIXEL, font)
-
-                    local brush = ffi.new("void*[1]")
-                    GP.GdipCreateSolidFill(argb, brush)
-
-                    local f  = el.frame
-                    local rc = ffi.new("GpRectF")
-                    rc.X, rc.Y     = logi(f.x), logi(f.y)
-                    rc.Width       = logi(f.w)
-                    rc.Height      = logi(f.h)
-                    GP.GdipDrawString(gfx, toWide(el.text), -1, font[0], rc, fmt[0], brush[0])
-
-                    GP.GdipDeleteBrush(brush[0])
-                    GP.GdipDeleteFont(font[0])
-                    GP.GdipDeleteFontFamily(family[0])
-                end
-            end
-        end
-        GP.GdipDeleteStringFormat(fmt[0])
     end
 -- END --
 
