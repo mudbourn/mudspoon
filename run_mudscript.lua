@@ -220,12 +220,16 @@
     -- modules exist as files but aren't hung on `hs`, and mac/ reaches them through
     -- the global (hs.json.encode, ...), so attach them here. require() also works on
     -- their own files; this only fills the global table.
-    -- NOTE: "webview" is TEMPORARILY stubbed (moved to STUB_MODULES below) to isolate
-    -- a hard crash: the WebView2 COM binding runs its async callbacks on the first
-    -- runloop pump and a bad vtable slot crashes the process silently. With it stubbed,
-    -- if the runloop survives, the crash IS the COM binding. Re-add "webview" here once
-    -- the binding is verified on the rig.
-    for _, name in ipairs({ "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application" }) do
+    -- WEBVIEW is OPT-IN: set MUDSPOON_WEBVIEW=1 to attempt the real WebView2 COM
+    -- bring-up (instrumented -- see hs/webview.lua's trace()). Left off, webview stays
+    -- a black-hole stub (below) so a COM fault can't take down a boot. The module has
+    -- never run on hardware; when enabled, the trace lines in mudspoon.log pinpoint the
+    -- last COM step reached before any crash (paired with the SEH exception-code line).
+    local ENABLE_WEBVIEW = os.getenv("MUDSPOON_WEBVIEW") == "1"
+
+    local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application" }
+    if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
+    for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
     end
 
@@ -281,10 +285,14 @@
         "uielement", "axuielement", "dialog", "focus", "http", "task",
         "audiodevice", "urlevent", "sound", "pasteboard", "processInfo",
         "chooser", "notify",
-        -- TEMPORARY: isolate the WebView2 COM crash (see wiring note above). The
-        -- black-hole makes hs.webview.new()/usercontent no-op instead of running COM.
-        "webview", "webview.usercontent",
     }
+
+    -- Webview: stub it UNLESS MUDSPOON_WEBVIEW=1 wired the real module above. The
+    -- black-hole makes hs.webview.new()/usercontent no-op instead of running COM.
+    if not ENABLE_WEBVIEW then
+        STUB_MODULES[#STUB_MODULES + 1] = "webview"
+        STUB_MODULES[#STUB_MODULES + 1] = "webview.usercontent"
+    end
 
     for _, name in ipairs(STUB_MODULES) do
         local full = "hs." .. name
@@ -340,6 +348,21 @@
 
     io.stdout:write("[run_mudscript] init.lua loaded; entering runloop (Ctrl+C to quit).\n")
     io.stdout:flush()
+
+    -- Runloop heartbeat (diagnostic): logs once a second so the log shows whether the
+    -- loop keeps ticking. If ticks CONTINUE past webview bring-up, the process is alive
+    -- and any "no window" is a visibility/choreography issue; if ticks STOP at bring-up,
+    -- the process died there via a path below our os.exit/SEH hooks (e.g. a COM
+    -- fail-fast). OFF by default now that the runloop is proven; set
+    -- MUDSPOON_HEARTBEAT=1 to re-enable.
+    if os.getenv("MUDSPOON_HEARTBEAT") == "1" then
+        local n = 0
+        hs.timer.doEvery(1.0, function()
+            n = n + 1
+            io.stderr:write("[run_mudscript] runloop heartbeat " .. n .. "\n")
+        end)
+    end
+
     local t0 = os.clock()
     hs.run()
     -- If we get here, hs.run() RETURNED (the loop's `running` went false) rather than

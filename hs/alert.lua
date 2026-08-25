@@ -9,6 +9,7 @@
     --                          packet). Frozen contract:
     --                            window.show(text, { x, y, w, h, alpha, bg, fg }) -> handle
     --                            handle:setAlpha(byte)   -- 0..255
+    --                            handle:front()          -- re-assert topmost
     --                            handle:close()          -- idempotent
     --   * hs.timer         -- fade animation + hold, off the shared runloop
     --   * hs.screen        -- screen geometry for centering
@@ -51,6 +52,11 @@ local alert = {}
 
     -- Gap between stacked alerts, px.
     local STACK_GAP = 12
+
+    -- How often to re-assert an alert's topmost z-order. The shell webview is also
+    -- topmost and force-fronts on move/resize; without a periodic re-front the
+    -- toast gets buried mid-life (there are no fade ticks during the hold phase).
+    local FRONT_MS = 100
 -- END --
 
 -- Style resolution --
@@ -191,6 +197,20 @@ local alert = {}
     end
 -- END --
 
+-- Keep-on-top tick (off the runloop, via hs.timer) --
+    -- Re-assert the alert's topmost z-order every FRONT_MS for its whole life, so a
+    -- shell force-front can't leave it buried during the hold phase (when no fade
+    -- ticks are running). Self-cancels the moment the entry's handle is gone.
+    local function keepFront(entry)
+        local function tick()
+            if not entry.handle then return end   -- closed; stop re-scheduling
+            entry.handle:front()
+            timer.doAfter(FRONT_MS / 1000, tick)
+        end
+        tick()
+    end
+-- END --
+
 -- Public API --
     -- hs.alert.show(text, [style], [duration])
     --   Hammerspoon also accepts show(text, seconds); we detect a numeric second
@@ -230,6 +250,8 @@ local alert = {}
         }
         active[#active + 1] = entry
         byId[entry.id] = entry
+
+        keepFront(entry)   -- stay above the shell for the alert's whole life
 
         if fadeIn > 0 then
             ramp(entry, 255, fadeIn)

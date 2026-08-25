@@ -12,6 +12,7 @@
     --       alpha   : initial 0..255 opacity            (default 255)
     --       bg, fg  : COLORREF fill / text, 0x00BBGGRR   (defaults below)
     --   handle:setAlpha(byte)   -- 0..255, clamped; drives the caller's fade
+    --   handle:front()          -- re-assert topmost; no move/size/activate
     --   handle:close()          -- destroy the window; idempotent
     --
     -- Depends on FOUNDATION only, for shared TYPES + the loaded lib handles + the
@@ -55,6 +56,7 @@ HRGN    CreateRoundRectRgn(int, int, int, int, int, int);
 BOOL    DeleteObject(HGDIOBJ);
 int     SetBkMode(HDC, int);
 DWORD   SetTextColor(HDC, DWORD);
+BOOL    SetWindowPos(HWND, HWND, int, int, int, int, UINT);
 ]]
 -- END --
 
@@ -68,6 +70,17 @@ DWORD   SetTextColor(HDC, DWORD);
 
     local SW_SHOWNOACTIVATE = 4
     local LWA_ALPHA         = 0x02
+
+    -- SetWindowPos: re-assert topmost without moving, sizing, or activating. The
+    -- shell webview is ALSO EX_TOPMOST and force-fronts itself on move/resize, so
+    -- within the topmost band it's last-fronted-wins -- an alert created earlier
+    -- gets buried behind the opaque WebView2 surface unless it keeps re-claiming
+    -- the top. HWND_TOPMOST is the (HWND)-1 sentinel.
+    local HWND_TOPMOST      = ffi.cast("HWND", ffi.cast("intptr_t", -1))
+    local SWP_NOSIZE        = 0x0001
+    local SWP_NOMOVE        = 0x0002
+    local SWP_NOACTIVATE    = 0x0010
+    local SWP_FRONT         = bit.bor(SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE)
     local TRANSPARENT       = 1           -- SetBkMode: don't paint behind glyphs
 
     local WM_PAINT          = 0x000F
@@ -169,6 +182,16 @@ DWORD   SetTextColor(HDC, DWORD);
         return self
     end
 
+    -- front(): re-claim the top of the topmost band without stealing focus or
+    -- moving/resizing. The policy layer calls this periodically for the alert's
+    -- whole life, so a shell force-front can't leave the toast buried. No-op once
+    -- closed, so a keep-on-top tick that overruns teardown does no harm.
+    function Handle:front()
+        if self._closed then return self end
+        U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_FRONT)
+        return self
+    end
+
     -- close(): destroy the window and forget its record. Idempotent -- the fade
     -- loop and an explicit closeAll() can both land here for the same window.
     function Handle:close()
@@ -219,6 +242,9 @@ local window = {}
         U.SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)
 
         U.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+        -- Land above an already-topmost shell right away; the policy layer keeps
+        -- re-asserting this for the alert's lifetime.
+        U.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_FRONT)
 
         return setmetatable({ _hwnd = hwnd, _key = key, _closed = false }, Handle)
     end

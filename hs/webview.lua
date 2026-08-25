@@ -60,6 +60,31 @@ local bit = require("bit")
     local usercontent = require("hs.webview.usercontent")
 -- END --
 
+-- Bring-up trace (first-light diagnostics; defined early -- ensureLibs uses it) --
+    -- WebView2 has never actually run under this host. Each COM boundary in the async
+    -- bring-up logs a line (tees to mudspoon.log), so if the rig crashes, the LAST
+    -- line names the exact step that faulted -- pair it with the SEH exception-code
+    -- capture in run_mudscript.lua. Bring-up is solid now, so this is OFF by default;
+    -- set MUDSPOON_WEBVIEW_TRACE=1 to re-enable the per-COM-boundary log.
+    local TRACE = os.getenv("MUDSPOON_WEBVIEW_TRACE") == "1"
+    local function trace(msg)
+        if TRACE then io.stderr:write("[hs.webview] " .. msg .. "\n") end
+    end
+
+    -- Bisection switch: MUDSPOON_WEBVIEW_NOHTML=1 makes html()/url() no-op, so the
+    -- view comes up blank. If the process then SURVIVES (heartbeats tick), the fault
+    -- is in the navigation / page / WebMessageReceived path; if it still dies, it is
+    -- the bare controller/visibility path. Diagnostic only.
+    local NO_HTML = os.getenv("MUDSPOON_WEBVIEW_NOHTML") == "1"
+
+    -- Deeper bisection: MUDSPOON_WEBVIEW_MINIMAL=1 stops the controller Invoke right
+    -- after get_CoreWebView2 -- skips add_WebMessageReceived, put_Bounds (by-value
+    -- RECT), put_IsVisible, and the queue flush. If the process then SURVIVES, one of
+    -- those three post-core calls is the corrupting call; if it STILL dies, merely
+    -- having a live controller pump messages is fatal. Diagnostic only.
+    local MINIMAL = os.getenv("MUDSPOON_WEBVIEW_MINIMAL") == "1"
+-- END --
+
 -- External libs unique to this module (loaded LAZILY, not at require time). --
     -- WebView2Loader.dll must be on the DLL search path (shipped next to the app, or
     -- the Evergreen runtime installed). Loading it at module scope would make a
@@ -85,7 +110,9 @@ local bit = require("bit")
         -- new() is called from mac/ on the runloop thread, so init here (once).
         -- RPC_E_CHANGED_MODE (already inited with another model) is benign, ignored.
         Ole.CoInitializeEx(nil, 0x2)  -- COINIT_APARTMENTTHREADED
-        trace("ensureLibs: WebView2Loader + ole32 loaded, CoInitializeEx(STA) done")
+        trace("ensureLibs: WebView2Loader + ole32 loaded, CoInitializeEx(STA) done"
+              .. " [LuaJIT " .. (ffi.abi("64bit") and "64-bit" or "32-bit")
+              .. ", win=" .. tostring(ffi.abi("win")) .. "]")
     end
 -- END --
 
@@ -333,17 +360,6 @@ BOOL    BringWindowToTop(HWND);
     local function keep(x) ALIVE[#ALIVE + 1] = x; return x end
 -- END --
 
--- Bring-up trace (first-light diagnostics) --
-    -- WebView2 has never actually run under this host. Each COM boundary in the async
-    -- bring-up logs a line (tees to mudspoon.log), so if the rig crashes, the LAST
-    -- line names the exact step that faulted -- pair it with the SEH exception-code
-    -- capture in run_mudscript.lua. Set MUDSPOON_WEBVIEW_TRACE=0 to silence once solid.
-    local TRACE = os.getenv("MUDSPOON_WEBVIEW_TRACE") ~= "0"
-    local function trace(msg)
-        if TRACE then io.stderr:write("[hs.webview] " .. msg .. "\n") end
-    end
--- END --
-
 -- COM apartment init now happens in ensureLibs() (first webview.new), so a session
 -- that never opens a webview neither loads the DLL nor touches COM. --
 
@@ -489,16 +505,20 @@ webview.usercontent = usercontent
 
     -- :html(str) -- load an HTML string (NavigateToString). Deferred until ready.
     function Webview:html(str)
+        if NO_HTML then trace(":html() suppressed (MUDSPOON_WEBVIEW_NOHTML)"); return self end
         local w = toWide(str)
         whenReady(self, function()
             self._html_keep = w  -- hold the wide buffer across the (sync-copying) call
+            trace(":html flush -> NavigateToString")
             self._core.lpVtbl.NavigateToString(self._core, ffi.cast("LPCWSTR", w))
+            trace(":html flush -> NavigateToString returned")
         end)
         return self
     end
 
     -- :url(str) -- navigate to a URL (Navigate). Deferred until ready.
     function Webview:url(str)
+        if NO_HTML then trace(":url() suppressed (MUDSPOON_WEBVIEW_NOHTML)"); return self end
         local w = toWide(str)
         whenReady(self, function()
             self._url_keep = w
@@ -622,6 +642,9 @@ webview.usercontent = usercontent
         if self._controller ~= nil then
             -- RISK: Close() must be safe to call exactly once; double-close is UB.
             pcall(function() self._controller.lpVtbl.Close(self._controller) end)
+            -- Release our retaining AddRef (taken in the ctrl Invoke). Close() first,
+            -- then drop our reference so the controller can be destroyed.
+            pcall(function() self._controller.lpVtbl.Release(self._controller) end)
         end
         self._controller = nil
         self._core       = nil
@@ -647,6 +670,7 @@ webview.usercontent = usercontent
         msgVt.Release        = relCast
         msgVt.Invoke = keep(ffi.cast("HRESULT (__stdcall *)(void*, void*, void*)",
             function(_this, _sender, argsPtr)
+                trace("msg Invoke: entered")
                 -- Guarded: never throw across the FFI boundary out of a COM callback.
                 pcall(function()
                     if self._ucc == nil then return end
@@ -654,11 +678,15 @@ webview.usercontent = usercontent
                     local out  = ffi.new("LPWSTR[1]")
                     -- RISK: for non-string web messages this returns an error HRESULT
                     -- and out[0] is untouched; the page always postMessage's a string.
+                    trace("msg Invoke: TryGetWebMessageAsString (slot 5)")
                     local hr = args.lpVtbl.TryGetWebMessageAsString(args, out)
                     if hr == S_OK and out[0] ~= nil then
                         local s = fromWide(out[0])
+                        trace("msg Invoke: got string len=" .. #s .. ", CoTaskMemFree")
                         Ole.CoTaskMemFree(out[0])       -- we own the returned buffer
+                        trace("msg Invoke: delivering to ucc")
                         self._ucc:_deliver(s)
+                        trace("msg Invoke: delivered")
                     end
                 end)
                 return S_OK
@@ -686,12 +714,30 @@ webview.usercontent = usercontent
                     local controller = ffi.cast("ICoreWebView2Controller*", controllerPtr)
                     self._controller = controller
 
+                    -- RETAIN it. The interface passed to a completion handler is valid
+                    -- only for the duration of Invoke; WebView2 releases its transient
+                    -- reference once Invoke returns. Without our own AddRef the
+                    -- controller's refcount hits 0 and it is destroyed under us -- and
+                    -- the very next message pump touches freed memory (a silent
+                    -- fail-fast, below SEH). Keeping the Lua-side pointer is NOT enough;
+                    -- the COM refcount is what keeps the C++ object alive. (get_ methods
+                    -- like get_CoreWebView2 already return an AddRef'd out-param, so the
+                    -- core needs no extra AddRef -- only this borrowed callback arg does.)
+                    controller.lpVtbl.AddRef(controller)
+                    trace("ctrl Invoke: controller AddRef'd (retained past Invoke)")
+
                     -- Fetch the CoreWebView2 we actually drive.
                     trace("ctrl Invoke: get_CoreWebView2 (vtbl slot 25)")
                     local corePtr = ffi.new("ICoreWebView2*[1]")
                     controller.lpVtbl.get_CoreWebView2(controller, corePtr)
                     self._core = corePtr[0]
                     trace("ctrl Invoke: core = " .. tostring(self._core))
+
+                    if MINIMAL then
+                        trace("ctrl Invoke: MINIMAL -- skipping add_WebMessageReceived/"
+                              .. "put_Bounds/put_IsVisible/flush; controller left idle")
+                        return
+                    end
 
                     -- Wire the page->Lua message stream (only if a controller was given).
                     if self._core ~= nil then
@@ -790,8 +836,14 @@ webview.usercontent = usercontent
             error("hs.webview: CreateWindowExA failed")
         end
         trace("new(): host window created (hwnd ok)")
-        -- Start fully opaque; the window is hidden until :show().
-        U.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
+        -- Start fully TRANSPARENT (alpha 0), not opaque. A layered window hosting a
+        -- WebView2 child can composite ONE opaque frame when the child first paints,
+        -- before a subsequent alpha() lands -- seen as a flash/stutter right before the
+        -- fade-in. Beginning at 0 means there is never an opaque value to flash.
+        -- Consumers set their alpha before showing (mudscript always fades in from 0);
+        -- _alpha keeps the logical 1.0 default until then, and the window is hidden at
+        -- birth, so the physical/logical gap is never visible.
+        U.SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA)
 
         local self = setmetatable({
             _hwnd           = hwnd,
