@@ -134,10 +134,13 @@ DWORD  GetLastError(void);
         end
     -- END --
 
-    -- hs.fs.dir(path) -> iterator --
-        -- for name in hs.fs.dir(path) do ... end. Yields every entry INCLUDING
-        -- "." and ".." (matching LFS). Raises if the path can't be opened (LFS
-        -- raises too). FindFirstFileA's first hit IS "." for a real directory.
+    -- hs.fs.dir(path) -> iterFn, dirObj --
+        -- LFS/Hammerspoon return TWO values: the iterator AND a directory object
+        -- with a :close() method. `for name in hs.fs.dir(path) do ... end` uses the
+        -- iterator (first value); callers that grab `local it, d = hs.fs.dir(p)` then
+        -- call `d:close()` explicitly (mudscript's guardian does). Returning only the
+        -- iterator makes that d nil and d:close() crash -- so both are returned.
+        -- Yields every entry INCLUDING "." and ".."; raises if the path can't open.
         function fs.dir(path)
             local fd   = ffi.new("WIN32_FIND_DATAA")
             local spec = path .. "\\*"
@@ -150,10 +153,13 @@ DWORD  GetLastError(void);
 
             local first  = true
             local closed = false
+            local function closeHandle()      -- idempotent: exhaustion and :close() both land here
+                if not closed then K.FindClose(h); closed = true end
+            end
 
             -- Iterator. Frees the Win32 search handle once exhausted so a caller
             -- that runs the loop to completion leaks nothing.
-            return function()
+            local function iter()
                 if closed then return nil end
                 if first then
                     first = false
@@ -162,10 +168,16 @@ DWORD  GetLastError(void);
                 if K.FindNextFileA(h, fd) ~= 0 then
                     return ffi.string(fd.cFileName)
                 end
-                K.FindClose(h)
-                closed = true
+                closeHandle()
                 return nil
             end
+
+            -- LFS-style directory object. :close() is safe to call any time (before
+            -- or after exhaustion), matching LFS, so an early-exiting loop can free
+            -- the handle without leaking.
+            local dirObj = { close = function() closeHandle() end }
+
+            return iter, dirObj
         end
     -- END --
 

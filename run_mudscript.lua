@@ -73,7 +73,7 @@
     -- modules exist as files but aren't hung on `hs`, and mac/ reaches them through
     -- the global (hs.json.encode, ...), so attach them here. require() also works on
     -- their own files; this only fills the global table.
-    for _, name in ipairs({ "alert", "json", "execute", "fs", "webview" }) do
+    for _, name in ipairs({ "alert", "json", "execute", "fs", "webview", "canvas" }) do
         hs[name] = require("hs." .. name)
     end
 
@@ -107,7 +107,7 @@
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
-        "application", "window", "window.filter", "canvas", "menubar",
+        "application", "window", "window.filter", "menubar",
         "uielement", "axuielement", "dialog", "focus", "http", "task",
         "audiodevice", "urlevent", "sound", "pasteboard", "processInfo",
         "geometry", "chooser", "notify",
