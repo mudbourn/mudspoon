@@ -60,12 +60,32 @@ local bit = require("bit")
     local usercontent = require("hs.webview.usercontent")
 -- END --
 
--- External libs unique to this module. --
-    -- RISK: WebView2Loader.dll must be on the DLL search path (shipped next to the
-    -- app, or the Evergreen runtime installed). ffi.load fails hard otherwise.
-    local Loader = ffi.load("WebView2Loader")
-    -- ole32 for COM apartment init + CoTaskMemFree of strings COM hands back.
-    local Ole    = ffi.load("ole32")
+-- External libs unique to this module (loaded LAZILY, not at require time). --
+    -- WebView2Loader.dll must be on the DLL search path (shipped next to the app, or
+    -- the Evergreen runtime installed). Loading it at module scope would make a
+    -- missing DLL abort the WHOLE host at require("hs.webview") -- even for a session
+    -- that never opens a webview. So defer: require() only cdefs; the DLLs load on
+    -- the first webview.new(), and a missing one raises a clear, contained error
+    -- there instead of taking down boot. ole32 (COM apartment + CoTaskMemFree) is a
+    -- system DLL and effectively always present, but is loaded on the same path.
+    local Loader, Ole  -- populated by ensureLibs()
+
+    local function ensureLibs()
+        if Loader and Ole then return end
+        local ok, l = pcall(ffi.load, "WebView2Loader")
+        if not ok then
+            error("hs.webview: WebView2Loader.dll not found on the DLL search path -- "
+                .. "ship it next to the app or install the WebView2 Evergreen runtime "
+                .. "(" .. tostring(l) .. ")", 2)
+        end
+        Loader = l
+        Ole    = ffi.load("ole32")
+
+        -- COM must be initialized on the thread that pumps WebView2's messages.
+        -- new() is called from mac/ on the runloop thread, so init here (once).
+        -- RPC_E_CHANGED_MODE (already inited with another model) is benign, ignored.
+        Ole.CoInitializeEx(nil, 0x2)  -- COINIT_APARTMENTTHREADED
+    end
 -- END --
 
 -- Own FFI surface (functions + COM structs + unique typedefs; no shared type re-declared) --
@@ -312,14 +332,8 @@ BOOL    BringWindowToTop(HWND);
     local function keep(x) ALIVE[#ALIVE + 1] = x; return x end
 -- END --
 
--- COM apartment init (once, on the runloop thread that loads this module) --
-    -- RISK: WebView2 requires COM initialized on the thread that pumps its messages.
-    -- We assume this module is required from the runloop thread. RPC_E_CHANGED_MODE
-    -- (already inited with a different model) is benign and ignored.
-    do
-        Ole.CoInitializeEx(nil, COINIT_APARTMENTTHREADED)
-    end
--- END --
+-- COM apartment init now happens in ensureLibs() (first webview.new), so a session
+-- that never opens a webview neither loads the DLL nor touches COM. --
 
 -- UTF-8 <-> UTF-16 helpers --
     -- toWide(s) -> uint16_t[] NUL-terminated. Kept by the CALLER for the duration of
@@ -735,6 +749,7 @@ webview.usercontent = usercontent
     -- ignored (the consumer passes {} or a small table). We stash it; enabling dev
     -- tools requires ICoreWebView2Settings (not scaffolded -- not on the demand list).
     function webview.new(rect, prefs, usercontentController)
+        ensureLibs()   -- load WebView2Loader/ole32 now; clear error if the DLL is absent
         ensureClass()
         rect = rect or {}
         local r = { x = rect.x or 0, y = rect.y or 0, w = rect.w or 800, h = rect.h or 600 }
