@@ -56,6 +56,22 @@ without winget.
 - `Ctrl+Alt+K` pops a native alert and swallows the K keystroke.
 - `Ctrl+Alt+Q` quits.
 
+### First run of the module tree
+
+The spike is one file of raw FFI. The `hs/` tree is the rewrite, and its FFI
+packets (foundation, C, E, G) have only been compile- and logic-checked — no
+Win32 behaviour of theirs has run yet. `smoke.lua` is the first exercise of it:
+it loads `hs`, binds one hotkey, and runs the loop. Same console rules as the
+spike (physical, foreground, not RDP).
+
+```
+luajit smoke.lua
+```
+
+Press `Ctrl+Alt+K`. It passes (exit 0) if the chord fires, the `K` never reaches
+the focused window (swallowed), and the process exits cleanly. It fails (exit 1)
+if 30s pass with no chord — the hook likely never installed.
+
 ## Open before this reaches another machine
 
 Not blocking the spike.

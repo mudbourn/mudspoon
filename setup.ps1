@@ -3,7 +3,12 @@
     # PATH for both future shells and this one, then verifies it runs.
     # Run in PowerShell:
     #     powershell -ExecutionPolicy Bypass -File .\setup.ps1
+    # Pass -Smoke to run smoke.lua right after (the first real exercise of the
+    # hs/ module tree's FFI). Physical console only, not RDP.
+    #     powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Smoke
 # END #
+
+param([switch]$Smoke)
 
 $ErrorActionPreference = "Stop"
 
@@ -76,4 +81,21 @@ $ErrorActionPreference = "Stop"
     Write-Host ""
     Write-Host "luajit ready. Run the spike with:"
     Write-Host "    luajit .\spike_hook_loop_alert.lua"
+    Write-Host "or smoke-test the module tree with:"
+    Write-Host "    luajit .\smoke.lua"
+# END #
+
+# Smoke test #
+    # -Smoke chains the first run of the hs/ tree. The script self-locates its
+    # requires, so run it from the repo root (where smoke.lua lives).
+    if ($Smoke) {
+        $smoke = Join-Path $PSScriptRoot "smoke.lua"
+        if (-not (Test-Path $smoke)) {
+            throw "-Smoke given but smoke.lua not found next to setup.ps1 ($smoke)."
+        }
+        Write-Host ""
+        Write-Host "running smoke test. press Ctrl+Alt+K on this console..."
+        & "$InstallDir\luajit.exe" $smoke
+        exit $LASTEXITCODE   # carry smoke.lua's pass/fail (0/1) out of setup
+    }
 # END #
