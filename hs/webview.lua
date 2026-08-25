@@ -60,6 +60,15 @@ local bit = require("bit")
     local usercontent = require("hs.webview.usercontent")
 -- END --
 
+-- DPI: consumers pass LOGICAL rects (mac-like points); the host window + WebView2
+-- bounds are physical device pixels. WebView2 auto-scales its CSS by the monitor DPI
+-- when the process is DPI-aware, so a physically-sized host renders the page at the
+-- right logical size and sharp. logi() maps logical -> physical; with the process
+-- DPI-unaware scale is 1.0 and this is a no-op (old behaviour). See [[hs.dpiscale]].
+    local dpiscale = require("hs.dpiscale")
+    local function logi(v) return math.floor(v * dpiscale.get() + 0.5) end
+-- END --
+
 -- Bring-up trace (first-light diagnostics; defined early -- ensureLibs uses it) --
     -- WebView2 has never actually run under this host. Each COM boundary in the async
     -- bring-up logs a line (tees to mudspoon.log), so if the rig crashes, the LAST
@@ -321,6 +330,7 @@ BOOL    BringWindowToTop(HWND);
     local LWA_ALPHA         = 0x02
 
     local WM_DESTROY        = 0x0002
+    local WM_ERASEBKGND     = 0x0014
 
     -- SetWindowPos flags + special HWND z-order sentinels.
     local SWP_NOMOVE        = 0x0002
@@ -414,6 +424,12 @@ BOOL    BringWindowToTop(HWND);
     local wndProc = keep(ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
         if msg == WM_DESTROY then
             return 0
+        elseif msg == WM_ERASEBKGND then
+            -- Claim the erase so Windows never blanks the host between frames. The
+            -- WebView2 child fully covers and paints the client, so a host-side erase
+            -- only adds a flash on invalidate/alpha-change/front -- the same flicker the
+            -- canvas alerts had. (Same fix as hs/canvas.lua's WM_ERASEBKGND.)
+            return 1
         end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end))
@@ -474,10 +490,10 @@ webview.usercontent = usercontent
     -- Push the current self._rect to both the host window and the controller bounds.
     local function pushBounds(self)
         local r = self._rect
-        U.MoveWindow(self._hwnd, r.x, r.y, r.w, r.h, 1)
+        U.MoveWindow(self._hwnd, logi(r.x), logi(r.y), logi(r.w), logi(r.h), 1)
         if self._controller ~= nil then
             local rc = ffi.new("RECT")
-            rc.left, rc.top, rc.right, rc.bottom = 0, 0, r.w, r.h  -- client-relative
+            rc.left, rc.top, rc.right, rc.bottom = 0, 0, logi(r.w), logi(r.h)  -- physical client px
             self._controller.lpVtbl.put_Bounds(self._controller, rc)
         end
     end
@@ -831,7 +847,8 @@ webview.usercontent = usercontent
         local exStyle = bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
 
         local hwnd = U.CreateWindowExA(exStyle, classBuf, "", WS_POPUP,
-                                       r.x, r.y, r.w, r.h, nil, nil, hInst, nil)
+                                       logi(r.x), logi(r.y), logi(r.w), logi(r.h),
+                                       nil, nil, hInst, nil)
         if hwnd == nil then
             error("hs.webview: CreateWindowExA failed")
         end

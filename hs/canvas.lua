@@ -42,10 +42,19 @@
 local ffi = require("ffi")
 local bit = require("bit")
 
-local host  = require("hs.foundation")
-local U     = host.C.user32
-local G     = host.C.gdi32
-local hInst = host.moduleHandle
+local host     = require("hs.foundation")
+local timer    = require("hs.timer")
+local dpiscale = require("hs.dpiscale")
+local U        = host.C.user32
+local G        = host.C.gdi32
+local hInst    = host.moduleHandle
+
+-- All hs.canvas coordinates + font sizes are LOGICAL (mac-like points); windows are
+-- drawn at native device pixels. logi() scales a logical value to physical for the
+-- GDI/window calls; unscale() maps a physical pointer coord back to logical for hit
+-- testing. With the process DPI-unaware, scale is 1.0 and both are identity.
+local function logi(v)    return math.floor(v * dpiscale.get() + 0.5) end
+local function unscale(v) return v / dpiscale.get() end
 
 -- Own FFI surface: only prototypes nothing else has declared globally --
     -- (RegisterClassExA/CreateWindowExA/ShowWindow/DestroyWindow/DefWindowProcA/
@@ -59,6 +68,8 @@ int     FrameRgn(HDC, HRGN, HBRUSH, int, int);
 HGDIOBJ SelectObject(HDC, HGDIOBJ);
 void*   CreateFontW(int,int,int,int,int,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,const unsigned short*);
 int     DrawTextW(HDC, const unsigned short*, int, RECT*, UINT);
+HCURSOR LoadCursorA(HINSTANCE, LPCSTR);
+BOOL    UpdateWindow(HWND);
 typedef struct { DWORD cbSize; DWORD dwFlags; HWND hwndTrack; DWORD dwHoverTime; } MUDSPOON_TME;
 BOOL    TrackMouseEvent(MUDSPOON_TME*);
 ]]
@@ -83,11 +94,19 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     local SWP_FRONT         = bit.bor(SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE)
 
     local WM_DESTROY        = 0x0002
+    local WM_ERASEBKGND     = 0x0014
     local WM_PAINT          = 0x000F
     local WM_MOUSEMOVE      = 0x0200
     local WM_LBUTTONDOWN    = 0x0201
     local WM_MOUSELEAVE     = 0x02A3
     local TME_LEAVE         = 0x00000002
+
+    -- Keep-on-top cadence. The mudscript shell is ALSO WS_EX_TOPMOST and re-fronts
+    -- itself on shell events (:bringToFront); within the one topmost band last-fronted
+    -- wins, so a canvas fronted once at show() gets buried the instant the shell fronts.
+    -- A top-most canvas re-asserts its z-order every FRONT_MS for its whole life. This
+    -- is why alerts render before load (no shell yet) but vanished after (shell on top).
+    local FRONT_MS          = 0.1
 
     -- DrawTextW formats. Long / multi-line text (the message) wraps and hangs from
     -- the top of its frame; short text (the close glyph) centres on both axes.
@@ -99,12 +118,11 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     local FMT_WRAP      = bit.bor(DT_CENTER, DT_WORDBREAK, DT_NOPREFIX)
     local FMT_GLYPH     = bit.bor(DT_CENTER, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX)
 
-    -- Font: DEFAULT_CHARSET, CLEARTYPE_QUALITY, normal weight. Point size -> device
-    -- height at ~96dpi (1pt ~= 1.333px); negative asks for character (not cell) height.
+    -- Font: DEFAULT_CHARSET, CLEARTYPE_QUALITY, normal weight. Negative height asks
+    -- for character (not cell) height; textSize is used 1:1 (see the font code).
     local FW_NORMAL         = 400
     local DEFAULT_CHARSET   = 1
     local CLEARTYPE_QUALITY = 5
-    local PX_PER_PT         = 96 / 72
 
     local DEFAULT_RADIUS    = 20
     local DEFAULT_BG        = 0x001C1F24    -- COLORREF 0x00BBGGRR
@@ -181,6 +199,7 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
 
 -- Per-window records for the shared WndProc, keyed by HWND-as-integer --
     local records = {}
+    local paintErrLogged = false   -- gate the one-time swallowed-paint-error log
     local function keyOf(hwnd) return tonumber(ffi.cast("intptr_t", hwnd)) end
 
     -- Hit-test: the top-most element (highest index) whose frame contains (x,y).
@@ -215,11 +234,14 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
         U.FillRect(hdc, rc, brush)
         G.DeleteObject(brush)
 
-        -- 1px+ accent stroke, following the same rounded region.
+        -- 1px+ accent stroke, following the same rounded region. Client rect (w,h) is
+        -- physical; radius + stroke width are logical, so scale them to match.
         if box and box.strokeColor and (box.strokeWidth or 0) > 0 then
-            local rgn = G.CreateRoundRectRgn(0, 0, w + 1, h + 1, rec.radius, rec.radius)
+            local rad = logi(rec.radius)
+            local sw  = math.max(1, logi(box.strokeWidth))
+            local rgn = G.CreateRoundRectRgn(0, 0, w + 1, h + 1, rad, rad)
             local sb  = G.CreateSolidBrush(toRef(box.strokeColor, DEFAULT_FG))
-            U.FrameRgn(hdc, rgn, sb, box.strokeWidth, box.strokeWidth)
+            G.FrameRgn(hdc, rgn, sb, sw, sw)
             G.DeleteObject(sb)
             G.DeleteObject(rgn)
         end
@@ -232,15 +254,19 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
                 local a = alphaOf(el.textColor, 1)
                 if a > 0.01 then
                     local f   = el.frame
-                    local fr  = ffi.new("RECT")
-                    fr.left, fr.top    = f.x, f.y
-                    fr.right, fr.bottom = f.x + f.w, f.y + f.h
+                    local fr  = ffi.new("RECT")   -- logical frame -> physical device rect
+                    fr.left, fr.top     = logi(f.x), logi(f.y)
+                    fr.right, fr.bottom = logi(f.x + f.w), logi(f.y + f.h)
 
                     local size = el.textSize or 13
                     local face = el.textFont or "Segoe UI"
                     if face == "Helvetica" then face = "Segoe UI" end
+                    -- macOS hs.canvas treats textSize as ~1px/point (and ms_alert sizes
+                    -- its boxes to that), so the logical height is textSize itself; logi()
+                    -- turns it into physical device pixels for the current DPI. Negative
+                    -- asks for character (not cell) height.
                     local font = G.CreateFontW(
-                        -math.floor(size * PX_PER_PT + 0.5), 0, 0, 0, FW_NORMAL,
+                        -logi(size), 0, 0, 0, FW_NORMAL,
                         0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, toWide(face))
                     local old = G.SelectObject(hdc, font)
 
@@ -266,12 +292,22 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
     local wndProc = ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
         local rec = records[keyOf(hwnd)]
         if msg == WM_PAINT then
-            if rec then pcall(paint, rec, hwnd)
+            if rec then
+                local ok, err = pcall(paint, rec, hwnd)
+                if not ok and not paintErrLogged then
+                    paintErrLogged = true   -- once: paint fires often, don't spam
+                    io.stderr:write("hs.canvas: paint error (swallowed): " .. tostring(err) .. "\n")
+                end
             else
                 -- No record yet: still consume the paint so Windows doesn't loop on it.
                 local ps = ffi.new("PAINTSTRUCT"); U.BeginPaint(hwnd, ps); U.EndPaint(hwnd, ps)
             end
             return 0
+        elseif msg == WM_ERASEBKGND then
+            -- Suppress the default background erase. paint() fills the whole client
+            -- every time, so erasing first only causes a blank flash between frames --
+            -- the flicker seen when an alert repaints (fade/slide/re-show). Claim it.
+            return 1
         elseif msg == WM_MOUSEMOVE then
             if rec and rec.mouseCb then
                 pcall(function()
@@ -299,6 +335,7 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
                     local L = tonumber(ffi.cast("uint32_t", lp))
                     local x = bit.band(L, 0xFFFF);            if x >= 0x8000 then x = x - 0x10000 end
                     local y = bit.band(bit.rshift(L, 16), 0xFFFF); if y >= 0x8000 then y = y - 0x10000 end
+                    x, y = unscale(x), unscale(y)   -- physical client -> logical for hit test
                     rec.mouseCb(rec.self, "mouseDown", hitTest(rec, x, y), x, y)
                 end)
             end
@@ -321,6 +358,10 @@ BOOL    TrackMouseEvent(MUDSPOON_TME*);
         wc.lpfnWndProc   = wndProc
         wc.hInstance     = hInst
         wc.lpszClassName = classBuf
+        -- Standard arrow cursor. Without an hCursor the class inherits none, so Windows
+        -- leaves whatever cursor was last set (often the app-starting/wait cursor) when
+        -- the pointer is over the alert. IDC_ARROW = MAKEINTRESOURCE(32512).
+        wc.hCursor       = U.LoadCursorA(nil, ffi.cast("LPCSTR", 32512))
         if U.RegisterClassExA(wc) == 0 then
             error("hs.canvas: RegisterClassExA failed")
         end
@@ -360,20 +401,45 @@ local canvas = {}
     end
 
     local function invalidate(self)
-        if not self._closed and self._hwnd then U.InvalidateRect(self._hwnd, nil, true) end
+        -- bErase=false: paint() repaints the whole client, so no erase pass (which would
+        -- blank the window first and flicker). WM_ERASEBKGND is also claimed above.
+        if not self._closed and self._hwnd then U.InvalidateRect(self._hwnd, nil, false) end
     end
 
     -- Rounded region matching the current size + the box radius; call after any
-    -- create or resize so corners stay rounded.
+    -- create or resize so corners stay rounded. Frame + radius are logical -> scale to
+    -- the physical window pixels the region is measured in.
     local function applyRegion(self)
         if self._closed or not self._hwnd then return end
         local f = self._frame
         U.SetWindowRgn(self._hwnd,
-            G.CreateRoundRectRgn(0, 0, f.w + 1, f.h + 1, self._rec.radius, self._rec.radius), true)
+            G.CreateRoundRectRgn(0, 0, logi(f.w) + 1, logi(f.h) + 1,
+                                 logi(self._rec.radius), logi(self._rec.radius)), true)
     end
 
-    function Canvas:level(_) return self end        -- topmost is applied at show()
+    -- level(n): Win32 has one topmost band, so n>=0 means "top-most" (the only
+    -- distinction mudscript needs). Stored so the keep-on-top tick knows whether to
+    -- run; the actual z-order is applied/held from show() onward.
+    function Canvas:level(n)
+        if n == nil then return self._level end
+        self._level = n
+        return self
+    end
     function Canvas:behavior(_) return self end      -- no Spaces concept on Win32
+
+    -- Keep-on-top tick: re-front a top-most canvas every FRONT_MS so a shell
+    -- :bringToFront can't leave it buried. Idempotent start; stopped by hide/delete.
+    local function startKeepFront(self)
+        if self._frontTimer or (self._level and self._level < 0) then return end
+        self._frontTimer = timer.doEvery(FRONT_MS, function()
+            if self._closed or not self._hwnd then return end
+            U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_FRONT)
+        end)
+    end
+
+    local function stopKeepFront(self)
+        if self._frontTimer then self._frontTimer:stop(); self._frontTimer = nil end
+    end
 
     function Canvas:alpha(a)
         if a == nil then return self._alpha end
@@ -388,8 +454,7 @@ local canvas = {}
         local resized = (r.w and r.w ~= f.w) or (r.h and r.h ~= f.h)
         f.x = r.x or f.x; f.y = r.y or f.y; f.w = r.w or f.w; f.h = r.h or f.h
         if not self._closed and self._hwnd then
-            U.MoveWindow(self._hwnd, math.floor(f.x), math.floor(f.y),
-                         math.floor(f.w), math.floor(f.h), true)
+            U.MoveWindow(self._hwnd, logi(f.x), logi(f.y), logi(f.w), logi(f.h), true)
             if resized then applyRegion(self) end
             invalidate(self)
         end
@@ -441,7 +506,7 @@ local canvas = {}
         local f = self._frame
         if not self._hwnd then
             local hwnd = U.CreateWindowExA(EX_STYLE, classBuf, "", WS_POPUP,
-                math.floor(f.x), math.floor(f.y), math.floor(f.w), math.floor(f.h),
+                logi(f.x), logi(f.y), logi(f.w), logi(f.h),
                 nil, nil, hInst, nil)
             if hwnd == nil then error("hs.canvas: CreateWindowExA failed") end
             self._hwnd    = hwnd
@@ -453,7 +518,11 @@ local canvas = {}
         applyAlpha(self)
         U.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
         U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_FRONT)
+        startKeepFront(self)   -- hold the top of the band against the shell
+        -- Paint synchronously before the first composite, so the window is never shown
+        -- as an unpainted (garbage) frame -- the flash seen when an alert first appears.
         invalidate(self)
+        U.UpdateWindow(self._hwnd)
         return self
     end
 
@@ -468,6 +537,7 @@ local canvas = {}
     end
 
     function Canvas:hide()
+        stopKeepFront(self)
         if not self._closed and self._hwnd then U.ShowWindow(self._hwnd, 0) end  -- SW_HIDE
         return self
     end
@@ -475,6 +545,7 @@ local canvas = {}
     function Canvas:delete()
         if self._closed then return self end
         self._closed = true
+        stopKeepFront(self)
         if self._hwnd then
             records[self._key] = nil
             U.DestroyWindow(self._hwnd)
@@ -491,8 +562,10 @@ local canvas = {}
             _frame     = { x = rect.x or 0, y = rect.y or 0, w = rect.w or 0, h = rect.h or 0 },
             _alpha     = 1,
             _fillAlpha = 1,
+            _level     = 0,          -- >=0 => top-most (default); drives keep-on-top
             _closed    = false,
             _hwnd      = nil,
+            _frontTimer = nil,
             _rec       = { elements = {}, radius = DEFAULT_RADIUS, mouseCb = nil, tracking = false },
         }, Canvas)
         return self

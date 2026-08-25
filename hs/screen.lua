@@ -33,6 +33,12 @@ local ffi = require("ffi")
     -- load only if that seam ever moves; loading a lib twice is harmless in LuaJIT
     -- (the C declarations are process-global regardless).
     local U = (host.C and host.C.user32) or ffi.load("user32")
+
+    -- DPI: GetMonitorInfoA returns PHYSICAL pixels once the process is DPI-aware. We
+    -- report LOGICAL pixels (physical / scale) so the rest of the app keeps the same
+    -- coordinate space it had when DPI-unaware; canvas/webview re-apply the scale when
+    -- they create windows. With awareness off scale is 1.0 and this is a no-op.
+    local dpiscale = require("hs.dpiscale")
 -- END --
 
 -- Own FFI surface (functions + unique struct only; shared types come from Foundation) --
@@ -134,12 +140,13 @@ int  GetSystemMetrics(int);
             if U.GetMonitorInfoA(hMonitor, mi) ~= 0 then
                 local m = mi.rcMonitor
                 local w = mi.rcWork
+                local s = dpiscale.get()   -- physical -> logical
 
                 collected[#collected + 1] = {
                     deviceName = ffi.string(mi.szDevice),
                     primary    = (tonumber(mi.dwFlags) % 2) == 1,  -- PRIMARY is bit 0
-                    monitor    = { x = m.left, y = m.top, w = m.right - m.left, h = m.bottom - m.top },
-                    work       = { x = w.left, y = w.top, w = w.right - w.left, h = w.bottom - w.top },
+                    monitor    = { x = m.left/s, y = m.top/s, w = (m.right - m.left)/s, h = (m.bottom - m.top)/s },
+                    work       = { x = w.left/s, y = w.top/s, w = (w.right - w.left)/s, h = (w.bottom - w.top)/s },
                 }
             end
         end)
@@ -150,8 +157,9 @@ int  GetSystemMetrics(int);
     -- Fallback single screen from GetSystemMetrics, mirroring the spike's assumption. --
         -- Used only if EnumDisplayMonitors yields nothing (rare: session 0, headless).
         local function fallbackScreen()
-            local w = U.GetSystemMetrics(SM_CXSCREEN)
-            local h = U.GetSystemMetrics(SM_CYSCREEN)
+            local s = dpiscale.get()   -- physical -> logical
+            local w = U.GetSystemMetrics(SM_CXSCREEN) / s
+            local h = U.GetSystemMetrics(SM_CYSCREEN) / s
             return {
                 deviceName = "\\\\.\\DISPLAY1",
                 primary    = true,

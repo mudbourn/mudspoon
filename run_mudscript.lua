@@ -210,6 +210,42 @@
     }, ";")
 -- END --
 
+-- Per-monitor DPI awareness (Windows): draw at native pixels, not OS bitmap-stretch --
+    -- A DPI-UNAWARE process on a scaled display (e.g. 1920x1080 @ 125%) has EVERY
+    -- window magnified by the OS -> oversized + blurry text and jagged rounded corners,
+    -- across the shell webview AND canvas alerts. Declaring awareness makes Windows hand
+    -- us real device pixels; the hs layer then speaks logical units and scales at the
+    -- window boundary (hs.dpiscale + hs.screen/canvas/webview). MUST run before the
+    -- first window/DC, so do it here at boot, before init.lua.
+    --
+    -- MASTER SWITCH + ROLLBACK: set MUDSPOON_HIDPI=0 to skip this. With awareness off,
+    -- hs.dpiscale reports 1.0 and every scale becomes identity -- i.e. the old
+    -- (blurry-but-working) behaviour -- so this one gate reverts the whole hi-dpi path.
+    if package.config:sub(1, 1) == "\\" and os.getenv("MUDSPOON_HIDPI") ~= "0" then
+        local okffi, ffi = pcall(require, "ffi")
+        if okffi then
+            pcall(function()
+                ffi.cdef[[
+                    int  SetProcessDpiAwarenessContext(void*);  /* user32, Win10 1703+ */
+                    long SetProcessDpiAwareness(int);           /* shcore, Win8.1      */
+                    int  SetProcessDPIAware(void);              /* user32, Vista+      */
+                ]]
+                local u32 = ffi.load("user32")
+                -- Newest first: PER_MONITOR_AWARE_V2 = (DPI_AWARENESS_CONTEXT)-4.
+                local ok, res = pcall(function()
+                    return u32.SetProcessDpiAwarenessContext(ffi.cast("void*", -4))
+                end)
+                if not (ok and res ~= 0) then
+                    -- shcore PROCESS_PER_MONITOR_DPI_AWARE = 2, then the Vista system-DPI call.
+                    if not pcall(function() ffi.load("shcore").SetProcessDpiAwareness(2) end) then
+                        pcall(function() u32.SetProcessDPIAware() end)
+                    end
+                end
+            end)
+        end
+    end
+-- END --
+
 -- Assemble hs and expose it as a global (mac/ uses `hs` unqualified) --
     local hs = require("hs")
     _G.hs = hs
