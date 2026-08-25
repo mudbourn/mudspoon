@@ -121,8 +121,10 @@ UINT SendInput(UINT, INPUT*, int);
 -- END --
 
 -- INPUT builders --
-    -- Fill a keyboard INPUT slot in place.
-    local function fillKey(slot, vk, up)
+    -- Fill a keyboard INPUT slot in place. `extra` is the dwExtraInfo signature to
+    -- stamp -- MAGIC by default, or a caller-set eventSourceUserData (see :post()),
+    -- so a consumer's own sentinel round-trips back through the read hook.
+    local function fillKey(slot, vk, up, extra)
         slot.type = INPUT_KEYBOARD
         local ki = slot.u.ki
         ki.wVk         = vk
@@ -130,11 +132,11 @@ UINT SendInput(UINT, INPUT*, int);
         ki.dwFlags     = (up and KEYEVENTF_KEYUP or 0)
                        + (EXTENDED[vk] and KEYEVENTF_EXTENDEDKEY or 0)
         ki.time        = 0
-        ki.dwExtraInfo = MAGIC
+        ki.dwExtraInfo = extra or MAGIC
     end
 
     -- Fill a mouse INPUT slot in place. dx/dy meaningful only with MOVE/ABSOLUTE.
-    local function fillMouse(slot, flags, data, dx, dy)
+    local function fillMouse(slot, flags, data, dx, dy, extra)
         slot.type = INPUT_MOUSE
         local mi = slot.u.mi
         mi.dx          = dx or 0
@@ -142,7 +144,7 @@ UINT SendInput(UINT, INPUT*, int);
         mi.mouseData   = data or 0
         mi.dwFlags     = flags
         mi.time        = 0
-        mi.dwExtraInfo = MAGIC
+        mi.dwExtraInfo = extra or MAGIC
     end
 
     -- Materialise a sequence of fill-closures into one INPUT[n] and send it atomically.
@@ -197,6 +199,12 @@ UINT SendInput(UINT, INPUT*, int);
         local flags = self._flags or {}
         local fills = {}
 
+        -- dwExtraInfo signature to stamp on every INPUT of this event. A consumer
+        -- can override it via setProperty(eventSourceUserData, n) -- stored as
+        -- props.extra -- to tag its own events with a sentinel the read hook echoes
+        -- back as getProperty(eventSourceUserData). Absent one, foundation's MAGIC.
+        local extra = props.extra or MAGIC
+
         -- Optional absolute move before a mouse action, when the event carries a
         -- target point and hs.screen is present to normalise it.
         local function maybeMove()
@@ -204,7 +212,7 @@ UINT SendInput(UINT, INPUT*, int);
             local nx, ny = normAbsolute(props.x, props.y)
             if nx then
                 fills[#fills + 1] = function(s)
-                    fillMouse(s, MOUSEEVENTF_MOVE + MOUSEEVENTF_ABSOLUTE + MOUSEEVENTF_VIRTUALDESK, 0, nx, ny)
+                    fillMouse(s, MOUSEEVENTF_MOVE + MOUSEEVENTF_ABSOLUTE + MOUSEEVENTF_VIRTUALDESK, 0, nx, ny, extra)
                 end
             end
         end
@@ -217,22 +225,22 @@ UINT SendInput(UINT, INPUT*, int);
             if not up then
                 -- press modifiers, then the key
                 for _, m in ipairs(MOD_ORDER) do
-                    if flags[m] then fills[#fills + 1] = function(s) fillKey(s, MOD_VK[m], false) end end
+                    if flags[m] then fills[#fills + 1] = function(s) fillKey(s, MOD_VK[m], false, extra) end end
                 end
-                fills[#fills + 1] = function(s) fillKey(s, vk, false) end
+                fills[#fills + 1] = function(s) fillKey(s, vk, false, extra) end
             else
                 -- release the key, then the modifiers (reverse order)
-                fills[#fills + 1] = function(s) fillKey(s, vk, true) end
+                fills[#fills + 1] = function(s) fillKey(s, vk, true, extra) end
                 for i = #MOD_ORDER, 1, -1 do
                     local m = MOD_ORDER[i]
-                    if flags[m] then fills[#fills + 1] = function(s) fillKey(s, MOD_VK[m], true) end end
+                    if flags[m] then fills[#fills + 1] = function(s) fillKey(s, MOD_VK[m], true, extra) end end
                 end
             end
 
         elseif MOUSE_FLAGS[t] then
             maybeMove()
             local f = MOUSE_FLAGS[t]
-            fills[#fills + 1] = function(s) fillMouse(s, f, 0) end
+            fills[#fills + 1] = function(s) fillMouse(s, f, 0, nil, nil, extra) end
 
         elseif t == "mouseMoved" then
             maybeMove()
@@ -242,10 +250,10 @@ UINT SendInput(UINT, INPUT*, int);
             local sy = props.scrollY or 0
             local sx = props.scrollX or 0
             if sy ~= 0 then
-                fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_WHEEL,  sy * WHEEL_DELTA) end
+                fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_WHEEL,  sy * WHEEL_DELTA, nil, nil, extra) end
             end
             if sx ~= 0 then
-                fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_HWHEEL, sx * WHEEL_DELTA) end
+                fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_HWHEEL, sx * WHEEL_DELTA, nil, nil, extra) end
             end
 
         else
@@ -260,6 +268,19 @@ UINT SendInput(UINT, INPUT*, int);
     host.eventProto.post = post
 -- END --
 
+-- :setProperty() -- the write complement of foundation's :getProperty() --
+    -- Foundation gives events a read-only getProperty(k); consumers that build and
+    -- post synthetic events also need to WRITE fields (a button number, a scroll
+    -- delta, an eventSourceUserData sentinel). We attach the setter here rather than
+    -- in frozen foundation, on the same shared prototype as :post(). The key is one
+    -- of hs.eventtap.event.properties below; the value is stored verbatim in _props,
+    -- which getProperty reads and post() consumes. Returns self for chaining.
+    host.eventProto.setProperty = function(self, k, v)
+        self._props[k] = v
+        return self
+    end
+-- END --
+
 local event = {}
 
 -- event.types -- string constants matching what getType() returns --
@@ -271,6 +292,43 @@ local event = {}
         rightMouseDown = "rightMouseDown", rightMouseUp  = "rightMouseUp",
         otherMouseDown = "otherMouseDown", otherMouseUp  = "otherMouseUp",
         mouseMoved     = "mouseMoved",     scrollWheel   = "scrollWheel",
+
+        -- Constants the consumer references but which foundation's read hook does
+        -- NOT yet EMIT: flagsChanged (modifier press/release) and the drag types
+        -- (mouseMoved while a button is held). Defined so `event.types.flagsChanged`
+        -- resolves and comparisons don't silently test against nil -- but a tap on
+        -- these will not fire until foundation emits them (a separate, larger change
+        -- in the key/mouse hooks: flagsChanged needs modifier-transition tracking;
+        -- *Dragged needs button-state tracking on WM_MOUSEMOVE). See TODO note.
+        flagsChanged       = "flagsChanged",
+        leftMouseDragged   = "leftMouseDragged",
+        rightMouseDragged  = "rightMouseDragged",
+        otherMouseDragged  = "otherMouseDragged",
+    }
+-- END --
+
+-- event.properties -- opaque keys for get/setProperty (contract: stable keys) --
+    -- Real Hammerspoon uses integer CGEventField values; here (as with event.types)
+    -- they are the string keys the foundation event object stores fields under, so a
+    -- value written with setProperty is read back verbatim by getProperty, and the
+    -- ones the read hook already populates line up:
+    --   * eventSourceUserData -> "extra": foundation reads dwExtraInfo into
+    --     _props.extra, and post() stamps _props.extra into dwExtraInfo. So a
+    --     consumer's setProperty(eventSourceUserData, 999) round-trips through
+    --     inject -> hook, the idiom for tagging/recognising one's own events.
+    --   * mouseEventButtonNumber -> "buttonNumber": populated on real mouse events.
+    --   * scrollWheelEventDeltaAxis1 -> "mouseData": the wheel delta on real scrolls.
+    -- The rest (autorepeat, per-axis deltas, axis2) are not populated by the read
+    -- hook today, so on a REAL event they read nil (treated as 0/absent); they are
+    -- still settable on synthetic events a consumer builds and posts.
+    event.properties = {
+        eventSourceUserData        = "extra",
+        mouseEventButtonNumber     = "buttonNumber",
+        scrollWheelEventDeltaAxis1 = "mouseData",
+        scrollWheelEventDeltaAxis2 = "mouseDataAxis2",
+        keyboardEventAutorepeat    = "autorepeat",
+        mouseEventDeltaX           = "deltaX",
+        mouseEventDeltaY           = "deltaY",
     }
 -- END --
 
