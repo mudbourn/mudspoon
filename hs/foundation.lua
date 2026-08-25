@@ -270,8 +270,10 @@ local host = {
     -- kind and removed when the last one leaves, so an idle host holds no hook.
     local keySubs   = {}
     local mouseSubs = {}
-    local keyHook, mouseHook            -- HHOOK handles
-    local keyProc,  mouseProc           -- ffi callbacks; MUST stay referenced (GC)
+    local keyHook, mouseHook            -- HHOOK handles (nil when not installed)
+    local keyProc,  mouseProc           -- ffi callbacks; created ONCE, kept for the
+                                        -- process lifetime (see installKeyHook). GC
+                                        -- of a live LL callback = "bad callback" panic.
 
     -- keyboard message -> event type
     local KEY_TYPE = {
@@ -304,6 +306,13 @@ local host = {
     end
 
     local function installKeyHook()
+        -- Create the ffi callback ONCE and reuse it across every install/uninstall
+        -- cycle. UnhookWindowsHookEx does not guarantee no further calls: the OS can
+        -- deliver one more LL callback that was already in flight, so the callback
+        -- must outlive the hook. Freeing it (the old keyProc=nil on uninstall) let
+        -- GC collect it and a late OS call hit freed memory -> "bad callback" panic,
+        -- intermittently, whenever bind setup thrashed the hook while input flowed.
+        if not keyProc then
         keyProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
             if nCode >= 0 then
                 local t = KEY_TYPE[tonumber(wParam)]
@@ -325,11 +334,13 @@ local host = {
             end
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
+        end
         keyHook = U.SetWindowsHookExA(WH_KEYBOARD_LL, keyProc, host.moduleHandle, 0)
         if keyHook == nil then error("SetWindowsHookExA (keyboard) failed") end
     end
 
     local function installMouseHook()
+        if not mouseProc then
         mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
             if nCode >= 0 then
                 local m = MOUSE_TYPE[tonumber(wParam)]
@@ -356,6 +367,7 @@ local host = {
             end
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
+        end
         mouseHook = U.SetWindowsHookExA(WH_MOUSE_LL, mouseProc, host.moduleHandle, 0)
         if mouseHook == nil then error("SetWindowsHookExA (mouse) failed") end
     end
@@ -371,11 +383,14 @@ local host = {
         end
     end
 
+    -- Remove the OS hook but KEEP keyProc/mouseProc alive (see installKeyHook): a
+    -- late in-flight LL call after UnhookWindowsHookEx must land on a live callback,
+    -- not freed memory. The kept callback just falls through to CallNextHookEx.
     local function uninstallKeyHook()
-        if keyHook then U.UnhookWindowsHookEx(keyHook); keyHook, keyProc = nil, nil end
+        if keyHook then U.UnhookWindowsHookEx(keyHook); keyHook = nil end
     end
     local function uninstallMouseHook()
-        if mouseHook then U.UnhookWindowsHookEx(mouseHook); mouseHook, mouseProc = nil, nil end
+        if mouseHook then U.UnhookWindowsHookEx(mouseHook); mouseHook = nil end
     end
 
     function host.onKey(fn)

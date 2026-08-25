@@ -85,6 +85,7 @@ local bit = require("bit")
         -- new() is called from mac/ on the runloop thread, so init here (once).
         -- RPC_E_CHANGED_MODE (already inited with another model) is benign, ignored.
         Ole.CoInitializeEx(nil, 0x2)  -- COINIT_APARTMENTTHREADED
+        trace("ensureLibs: WebView2Loader + ole32 loaded, CoInitializeEx(STA) done")
     end
 -- END --
 
@@ -330,6 +331,17 @@ BOOL    BringWindowToTop(HWND);
     -- here for the whole process lifetime. We never remove entries.
     local ALIVE = {}
     local function keep(x) ALIVE[#ALIVE + 1] = x; return x end
+-- END --
+
+-- Bring-up trace (first-light diagnostics) --
+    -- WebView2 has never actually run under this host. Each COM boundary in the async
+    -- bring-up logs a line (tees to mudspoon.log), so if the rig crashes, the LAST
+    -- line names the exact step that faulted -- pair it with the SEH exception-code
+    -- capture in run_mudscript.lua. Set MUDSPOON_WEBVIEW_TRACE=0 to silence once solid.
+    local TRACE = os.getenv("MUDSPOON_WEBVIEW_TRACE") ~= "0"
+    local function trace(msg)
+        if TRACE then io.stderr:write("[hs.webview] " .. msg .. "\n") end
+    end
 -- END --
 
 -- COM apartment init now happens in ensureLibs() (first webview.new), so a session
@@ -663,6 +675,7 @@ webview.usercontent = usercontent
         ctrlVt.Release        = relCast
         ctrlVt.Invoke = keep(ffi.cast("HRESULT (__stdcall *)(void*, HRESULT, void*)",
             function(_this, hr, controllerPtr)
+                trace("ctrl Invoke: entered, hr=" .. tostring(tonumber(hr)))
                 pcall(function()
                     if self._deleted then return end
                     if hr ~= S_OK or controllerPtr == nil then
@@ -674,21 +687,27 @@ webview.usercontent = usercontent
                     self._controller = controller
 
                     -- Fetch the CoreWebView2 we actually drive.
+                    trace("ctrl Invoke: get_CoreWebView2 (vtbl slot 25)")
                     local corePtr = ffi.new("ICoreWebView2*[1]")
                     controller.lpVtbl.get_CoreWebView2(controller, corePtr)
                     self._core = corePtr[0]
+                    trace("ctrl Invoke: core = " .. tostring(self._core))
 
                     -- Wire the page->Lua message stream (only if a controller was given).
                     if self._core ~= nil then
+                        trace("ctrl Invoke: add_WebMessageReceived (vtbl slot 34)")
                         local token = ffi.new("EventRegistrationToken")
                         self._core.lpVtbl.add_WebMessageReceived(self._core, self._msgObj, token)
                     end
 
                     -- Size + visibility now that the controller exists.
+                    trace("ctrl Invoke: pushBounds (put_Bounds slot 6, RECT by value)")
                     pushBounds(self)
+                    trace("ctrl Invoke: put_IsVisible (slot 4)")
                     controller.lpVtbl.put_IsVisible(controller, self._visible and 1 or 0)
 
                     -- FLUSH: replay every op queued before the core went live, in order.
+                    trace("ctrl Invoke: flushing " .. #self._queue .. " queued op(s)")
                     local q = self._queue
                     self._queue = {}
                     for i = 1, #q do
@@ -697,6 +716,7 @@ webview.usercontent = usercontent
                             io.stderr:write("hs.webview: queued op error: " .. tostring(err) .. "\n")
                         end
                     end
+                    trace("ctrl Invoke: bring-up COMPLETE, core is live")
                 end)
                 return S_OK
             end))
@@ -713,6 +733,7 @@ webview.usercontent = usercontent
         envVt.Release        = relCast
         envVt.Invoke = keep(ffi.cast("HRESULT (__stdcall *)(void*, HRESULT, void*)",
             function(_this, hr, envPtr)
+                trace("env Invoke: entered, hr=" .. tostring(tonumber(hr)))
                 pcall(function()
                     if self._deleted then return end
                     if hr ~= S_OK or envPtr == nil then
@@ -721,7 +742,9 @@ webview.usercontent = usercontent
                         return
                     end
                     local env = ffi.cast("ICoreWebView2Environment*", envPtr)
+                    trace("env Invoke: calling CreateCoreWebView2Controller (vtbl slot 3)")
                     env.lpVtbl.CreateCoreWebView2Controller(env, self._hwnd, self._ctrlObj)
+                    trace("env Invoke: CreateCoreWebView2Controller returned")
                 end)
                 return S_OK
             end))
@@ -733,7 +756,10 @@ webview.usercontent = usercontent
         -- Evergreen runtime with a default per-user data folder. RISK: if the app
         -- has no write access to the default folder, creation fails asynchronously
         -- (surfaced as hr != S_OK above); pass an explicit temp folder if so.
+        trace("startBringUp: CreateCoreWebView2EnvironmentWithOptions (async kickoff)")
         local hr = Loader.CreateCoreWebView2EnvironmentWithOptions(nil, nil, nil, envObj)
+        trace("startBringUp: kickoff returned hr=" .. tostring(tonumber(hr))
+              .. " (waiting for env Invoke on the runloop)")
         if tonumber(hr) < 0 then
             error("hs.webview: CreateCoreWebView2EnvironmentWithOptions failed (hr=" ..
                   tostring(tonumber(hr)) .. ")")
@@ -763,6 +789,7 @@ webview.usercontent = usercontent
         if hwnd == nil then
             error("hs.webview: CreateWindowExA failed")
         end
+        trace("new(): host window created (hwnd ok)")
         -- Start fully opaque; the window is hidden until :show().
         U.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
 

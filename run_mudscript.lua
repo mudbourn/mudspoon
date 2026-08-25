@@ -42,12 +42,159 @@
     -- HOME (and a TMPDIR) no matter the host. Real vars still win when present.
     do
         local realGetenv = os.getenv
+
+        -- hs.execute routes mac/'s POSIX command strings through a real sh on
+        -- Windows (see hs/execute.lua). It reads $MUDSPOON_SH. Locate a shell by
+        -- probing, in order: a bundle beside this file at bin/, then the standard
+        -- git-for-Windows install paths. Only used when MUDSPOON_SH is unset, so an
+        -- explicit value in the real env always wins.
+        local shCandidates = {
+            { path = here .. "bin/busybox.exe",                  busybox = true },
+            { path = here .. "bin/sh.exe" },
+            { path = "C:/Program Files/Git/bin/sh.exe" },
+            { path = "C:/Program Files/Git/usr/bin/sh.exe" },
+            { path = "C:/Program Files (x86)/Git/bin/sh.exe" },
+        }
+        local resolvedSh
+        for _, c in ipairs(shCandidates) do
+            local fh = io.open(c.path, "rb")
+            if fh then
+                fh:close()
+                resolvedSh = c.busybox and ('"' .. c.path .. '" sh') or ('"' .. c.path .. '"')
+                break
+            end
+        end
+
         local fallback = {
             HOME   = homeDir,
             TMPDIR = realGetenv("TMPDIR") or realGetenv("TEMP") or realGetenv("TMP")
                      or (homeDir .. "/tmp"),
+            -- If nothing was found, fall back to bare `sh` (works if it is on PATH).
+            -- When even that is absent, mac/'s file ops / guardian hashing no-op; a
+            -- ONE-TIME warning is emitted below rather than per-call cmd.exe spam.
+            MUDSPOON_SH = resolvedSh or "sh",
         }
         os.getenv = function(k) return realGetenv(k) or fallback[k] end
+
+        _G.__mudspoon_shResolved = (realGetenv("MUDSPOON_SH") ~= nil) or (resolvedSh ~= nil)
+    end
+-- END --
+
+-- Persistent logging: tee every diagnostic write to a logfile --
+    -- Until now output went ONLY to the console (io.stderr), so a boot-time panic
+    -- or a window that closes takes its own error message with it. Tee stdout+stderr
+    -- into <hsDir>/mudspoon.log (appended each write, flushed immediately) so there
+    -- is always a durable record to read after the fact. The console still echoes.
+    --
+    -- A true LuaJIT `PANIC:` or a Win32 access violation aborts BELOW the Lua io
+    -- layer, so the tee alone can't see it. Rather than require a launch-time shell
+    -- redirect, we fold the capture in (Windows only, further down this block): a
+    -- Win32 unhandled-exception filter records the exception code (0xC0000005 = the
+    -- access violation the COM/webview path throws) and a SIGABRT handler records
+    -- LuaJIT's panic->abort. Both write a marker into the same logfile, so a hard
+    -- crash still leaves a durable "it died HERE, with THIS code" line.
+    do
+        local logPath = hsDir .. "/mudspoon.log"
+        local lf = io.open(logPath, "a")
+        if lf then
+            lf:write("\n===== mudspoon boot " .. os.date("%Y-%m-%d %H:%M:%S") .. " =====\n")
+            lf:flush()
+            -- File handles are userdata (no field assignment), so replace io.stdout/
+            -- io.stderr with proxy TABLES that tee :write into the log then forward to
+            -- the real stream. Only write/flush/close are used against these; forward
+            -- those explicitly rather than proxy every FILE method.
+            local function proxy(real)
+                return {
+                    write = function(self, ...) lf:write(...); lf:flush(); real:write(...); return self end,
+                    flush = function(self) lf:flush(); real:flush(); return self end,
+                    close = function() end,
+                }
+            end
+            io.stdout = proxy(io.stdout)
+            io.stderr = proxy(io.stderr)
+            io.write  = function(...) return io.stdout:write(...) end
+            -- print() writes to C stdout below the io layer; reroute it through the tee.
+            print = function(...)
+                local parts = {}
+                for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
+                io.stdout:write(table.concat(parts, "\t"), "\n")
+            end
+
+            -- Native crash capture (Windows only; a no-op elsewhere). Best-effort:
+            -- the handlers run tiny Lua after the fault, so keep them minimal and
+            -- pcall-guarded -- worst case they add nothing, they never make it worse.
+            local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+            local hasFFI, ffi = pcall(require, "ffi")
+            if IS_WINDOWS and hasFFI then
+                pcall(function()
+                    ffi.cdef[[
+                        typedef unsigned long DWORD;
+                        typedef long LONG;
+                        typedef struct _EXREC {
+                            DWORD ExceptionCode; DWORD ExceptionFlags;
+                            struct _EXREC* ExceptionRecord; void* ExceptionAddress;
+                            DWORD NumberParameters; size_t ExceptionInformation[15];
+                        } EXCEPTION_RECORD;
+                        typedef struct { EXCEPTION_RECORD* ExceptionRecord; void* ContextRecord; } EXCEPTION_POINTERS;
+                        typedef LONG (*TOPFILT)(EXCEPTION_POINTERS*);
+                        TOPFILT SetUnhandledExceptionFilter(TOPFILT);
+                        typedef void (*SIGH)(int);
+                        SIGH signal(int, SIGH);
+                    ]]
+                    local kernel32 = ffi.C
+                    local ok = pcall(function() return kernel32.SetUnhandledExceptionFilter end)
+                    if not ok then kernel32 = ffi.load("kernel32") end
+
+                    -- Unhandled structured exception (access violation, etc.). Return 1
+                    -- (EXCEPTION_EXECUTE_HANDLER) so the process ends after we log.
+                    local filt = ffi.cast("TOPFILT", function(info)
+                        pcall(function()
+                            local code = 0
+                            if info ~= nil and info.ExceptionRecord ~= nil then
+                                code = tonumber(info.ExceptionRecord.ExceptionCode) or 0
+                            end
+                            lf:write(("\n*** mudspoon: UNHANDLED WIN32 EXCEPTION 0x%08X"
+                                .. " -- process aborting ***\n"):format(code))
+                            if code == 0xC0000005 then
+                                lf:write("    (0xC0000005 = access violation -- typically a bad "
+                                    .. "FFI/COM vtable call, e.g. the WebView2 binding)\n")
+                            end
+                            lf:flush()
+                        end)
+                        return 1
+                    end)
+                    kernel32.SetUnhandledExceptionFilter(filt)
+
+                    -- SIGABRT (LuaJIT panic -> abort, CRT assert). SIGABRT == 22 on Win.
+                    local abrt = ffi.cast("SIGH", function()
+                        pcall(function()
+                            lf:write("\n*** mudspoon: SIGABRT -- LuaJIT panic or abort() ***\n")
+                            lf:flush()
+                        end)
+                    end)
+                    local sig = ffi.C.signal
+                    sig(22, abrt)
+
+                    -- The casts must outlive this scope or the callbacks are GC'd.
+                    _G.__mudspoon_crashcbs = { filt, abrt }
+                end)
+            end
+        end
+    end
+-- END --
+
+-- DIAGNOSTIC: trap os.exit so a boot-time quit reveals WHO called it --
+    -- mudscript exits via os.exit(0) in ms.shutdown/ms.restart. If the process
+    -- quits right after boot, this prints the call site + stack before exiting, so
+    -- we can see which path (guardian untrusted? a restart?) is firing.
+    do
+        local realExit = os.exit
+        os.exit = function(code, ...)
+            io.stderr:write("[run_mudscript] *** os.exit(" .. tostring(code)
+                .. ") called ***\n" .. debug.traceback("", 2) .. "\n")
+            io.stderr:flush()
+            return realExit(code, ...)
+        end
     end
 -- END --
 
@@ -73,7 +220,12 @@
     -- modules exist as files but aren't hung on `hs`, and mac/ reaches them through
     -- the global (hs.json.encode, ...), so attach them here. require() also works on
     -- their own files; this only fills the global table.
-    for _, name in ipairs({ "alert", "json", "execute", "fs", "webview", "canvas" }) do
+    -- NOTE: "webview" is TEMPORARILY stubbed (moved to STUB_MODULES below) to isolate
+    -- a hard crash: the WebView2 COM binding runs its async callbacks on the first
+    -- runloop pump and a bad vtable slot crashes the process silently. With it stubbed,
+    -- if the runloop survives, the crash IS the COM binding. Re-add "webview" here once
+    -- the binding is verified on the rig.
+    for _, name in ipairs({ "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application" }) do
         hs[name] = require("hs." .. name)
     end
 
@@ -81,6 +233,24 @@
     -- (there is no hs/eventtap.lua). init.lua already assembled the aggregate table
     -- as hs.eventtap (tap + .event); alias the bare require name to it via preload.
     package.preload["hs.eventtap"] = function() return hs.eventtap end
+-- END --
+
+-- Route os.execute through the POSIX sh too (Windows) --
+    -- mac/ also shells out via os.execute (mkdir -p, chmod, rm -rf, ...) which goes
+    -- STRAIGHT to cmd.exe and errors ("The syntax of the command is incorrect."), so
+    -- those ops silently fail. hs.execute already routes through sh; delegate to it.
+    -- Lua 5.1 os.execute returns a numeric code (0 = ok); map hs.execute's status to
+    -- that. No-command call reports shell availability (non-zero). mac/unix keeps the
+    -- native os.execute (hs.execute's mac path is the same popen shell anyway).
+    if package.config:sub(1, 1) == "\\" then
+        local realOsExecute = os.execute
+        os.execute = function(command)
+            if command == nil then return 1 end             -- "is a shell available?"
+            local _, status = hs.execute(command, true)
+            return status and 0 or 1
+        end
+        _G.__mudspoon_realOsExecute = realOsExecute          -- kept if ever needed
+    end
 -- END --
 
 -- Black-hole stub: callable, chainable, indexes to more of itself --
@@ -107,10 +277,13 @@
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
-        "application", "window", "window.filter", "menubar",
+        "window.filter", "menubar",
         "uielement", "axuielement", "dialog", "focus", "http", "task",
         "audiodevice", "urlevent", "sound", "pasteboard", "processInfo",
-        "geometry", "chooser", "notify",
+        "chooser", "notify",
+        -- TEMPORARY: isolate the WebView2 COM crash (see wiring note above). The
+        -- black-hole makes hs.webview.new()/usercontent no-op instead of running COM.
+        "webview", "webview.usercontent",
     }
 
     for _, name in ipairs(STUB_MODULES) do
@@ -166,5 +339,12 @@
     end
 
     io.stdout:write("[run_mudscript] init.lua loaded; entering runloop (Ctrl+C to quit).\n")
+    io.stdout:flush()
+    local t0 = os.clock()
     hs.run()
+    -- If we get here, hs.run() RETURNED (the loop's `running` went false) rather than
+    -- the process being killed by os.exit. The elapsed time says immediate (guard /
+    -- instant stop) vs ran-a-while.
+    io.stdout:write(("[run_mudscript] hs.run() RETURNED after %.3fs -- runloop stopped "
+        .. "(something called hs.stop/shutdown). Not an os.exit.\n"):format(os.clock() - t0))
 -- END --

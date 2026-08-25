@@ -51,22 +51,53 @@ local canvas = {}
     }
 -- END --
 
--- Canvas object: every method a chainable no-op (invisible until a real impl lands) --
-    -- Same shape as run_mudscript's black-hole: indexing yields the object (so both
-    -- namespace and method access resolve) and it is callable, so obj:show():alpha(1)
-    -- and obj[1] = {...} both no-op safely.
-    local function stubCanvas()
-        local o = {}
-        setmetatable(o, {
-            __index    = function() return o end,
-            __call     = function() return o end,
-            __newindex = function() end,        -- swallow element assignment (c[1] = {...})
-            __tostring = function() return "<hs.canvas stub>" end,
+-- Canvas object: minimal STATEFUL stub (invisible, but geometry reads real numbers) --
+    -- A pure black-hole broke callers that read geometry back: c:frame().y must be a
+    -- NUMBER, not another stub, or their animation math (mudscript's ms_alert) does
+    -- `toY - fromY` on a table and loops forever erroring. So track frame + alpha and
+    -- return real numbers from the getters; every other method is a chainable no-op.
+    local function stubCanvas(rect)
+        rect = rect or {}
+        local self = {
+            _frame = { x = rect.x or 0, y = rect.y or 0, w = rect.w or 0, h = rect.h or 0 },
+            _alpha = 1,
+        }
+
+        -- :frame([rect]) -> rect (copy) as getter, or set + return self.
+        function self:frame(r)
+            local f = self._frame
+            if r == nil then return { x = f.x, y = f.y, w = f.w, h = f.h } end
+            self._frame = { x = r.x or f.x, y = r.y or f.y, w = r.w or f.w, h = r.h or f.h }
+            return self
+        end
+        function self:topLeft(p)
+            local f = self._frame
+            if p == nil then return { x = f.x, y = f.y } end
+            f.x = p.x or f.x; f.y = p.y or f.y
+            return self
+        end
+        function self:size(s)
+            local f = self._frame
+            if s == nil then return { w = f.w, h = f.h } end
+            f.w = s.w or f.w; f.h = s.h or f.h
+            return self
+        end
+        function self:alpha(a)
+            if a == nil then return self._alpha end
+            self._alpha = a
+            return self
+        end
+
+        -- Everything else (show/hide/delete/appendElements/level/...) is a chainable
+        -- no-op; element assignment c[1] = {...} is swallowed. Real methods above are
+        -- rawkeys, so __index only fires for the unimplemented rest.
+        return setmetatable(self, {
+            __index    = function() return function() return self end end,
+            __newindex = function() end,
         })
-        return o
     end
 
-    function canvas.new() return stubCanvas() end
+    function canvas.new(rect) return stubCanvas(rect) end
     function canvas.elementCount() return 0 end
 -- END --
 
