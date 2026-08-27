@@ -264,7 +264,8 @@
     local ENABLE_WEBVIEW = os.getenv("MUDSPOON_WEBVIEW") == "1"
 
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
-        "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound" }
+        "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound", "focus",
+        "audiodevice" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -319,8 +320,7 @@
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
         "window.filter",
-        "uielement", "axuielement", "focus",
-        "audiodevice", "processInfo",
+        "uielement", "axuielement",
         "chooser",
     }
 
@@ -365,7 +365,23 @@
     hs.accessibilityState = function() return true end   -- Win32 has no AX gate
     hs.openConsole        = function() end                 -- no console window yet
     hs.loadSpoon          = function() return nil end      -- plugins not wired yet
-    hs.processInfo        = { bundleID = "org.mudspoon", processID = 0 }
+    -- processInfo: mac/ reads .processID (ms_settings pid probe). Resolve a REAL pid
+    -- via ffi -- GetCurrentProcessId on Windows, getpid() on the POSIX host we test on.
+    local realPID = 0
+    do
+        local okp, pid = pcall(function()
+            local ffi = require("ffi")
+            if package.config:sub(1, 1) == "\\" then
+                ffi.cdef([[ unsigned long GetCurrentProcessId(void); ]])
+                return tonumber(ffi.C.GetCurrentProcessId())
+            else
+                ffi.cdef([[ int getpid(void); ]])
+                return tonumber(ffi.C.getpid())
+            end
+        end)
+        if okp and pid then realPID = pid end
+    end
+    hs.processInfo        = { bundleID = "org.mudspoon", processID = realPID }
 -- END --
 
 -- Boot: run the entry file, then drive the runloop --
