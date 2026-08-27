@@ -1,3 +1,6 @@
 setup.sh
 clipboard.txt
 hammerspoon-1.1.1/
+
+# Hammerspoon upstream source, kept as a parity reference for the hs.* shims
+reference/

@@ -156,7 +156,7 @@ HICON LoadIconA(HINSTANCE, LPCSTR);
                     -- Left-click: honour an explicit click callback; otherwise, if a
                     -- menu exists, show it (so a menu-only tray icon is still usable).
                     if rec._clickCb then
-                        pcall(rec._clickCb)
+                        pcall(rec._clickCb, {})   -- upstream passes a modifiers table
                     else
                         pcall(function() rec:popupMenu() end)
                     end
@@ -291,10 +291,11 @@ HICON LoadIconA(HINSTANCE, LPCSTR);
             else
                 local id = counter.n
                 counter.n = id + 1
-                cmdMap[id] = it.fn
+                cmdMap[id] = { fn = it.fn, item = it }
                 local flags = MF_STRING
                 if it.disabled then flags = bit.bor(flags, MF_GRAYED) end
-                if it.checked  then flags = bit.bor(flags, MF_CHECKED) end
+                -- Upstream also honours state="on"/"off"/"mixed"; "on" == checked.
+                if it.checked or it.state == "on" then flags = bit.bor(flags, MF_CHECKED) end
                 local buf = ffi.new("char[?]", #tostring(title or "") + 1)
                 ffi.copy(buf, tostring(title or ""))
                 U.AppendMenuA(hm, flags, id, buf)
@@ -329,7 +330,11 @@ HICON LoadIconA(HINSTANCE, LPCSTR);
         U.PostMessageA(self._hwnd, WM_NULL, 0, 0)
         pcall(function() U.DestroyMenu(hmenu) end)   -- also frees submenus
 
-        if cmd > 0 and cmdMap[cmd] then pcall(cmdMap[cmd]) end
+        -- Upstream calls the item fn as fn(modifiers, itemTable). We do not track the
+        -- modifier state at popup time, so pass an empty (but non-nil) table -- callers
+        -- that write `function(mods) ... end` then index it safely instead of erroring.
+        local hit = cmd > 0 and cmdMap[cmd]
+        if hit and hit.fn then pcall(hit.fn, {}, hit.item) end
     end
 -- END --
 
