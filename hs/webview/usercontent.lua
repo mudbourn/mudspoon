@@ -13,7 +13,8 @@
     --
     -- Consumer demand is the whole API here (nothing more is used by mudscript):
     --   hs.webview.usercontent.new(name) -> controller
-    --   controller:setCallback(fn)   -- fn(messageString) per posted message
+    --   controller:setCallback(fn)   -- fn({ body = posted string, name = channel })
+    --                                   per posted message (the WKWebView message shape)
     --
     -- Deliberately ABSENT (unused by the consumer, so not scaffolded): injectScript,
     -- addUserScript, removeAllUserScripts. Add them only if a real caller appears.
@@ -28,20 +29,30 @@ local usercontent = {}
     local Controller = {}
     Controller.__index = Controller
 
-    -- setCallback(fn): fn is invoked as fn(message) for each string the page posts.
-    -- Returns self for chaining, mirroring Hammerspoon. Passing nil clears it.
+    -- setCallback(fn): fn is invoked as fn({ body = <posted string>, name = <channel> })
+    -- for each message the page posts -- the Hammerspoon/WKWebView message-table shape
+    -- (consumers read message.body). Returns self for chaining. Passing nil clears it.
     function Controller:setCallback(fn)
         self._callback = fn
         return self
     end
 
-    -- _deliver(message): PRIVATE seam called by hs.webview from the WebMessageReceived
-    -- handler. Guarded so a throwing consumer callback can never unwind across the
-    -- FFI boundary in the parent's Invoke (a throw there is a hard crash).
-    function Controller:_deliver(message)
+    -- _deliver(rawString): PRIVATE seam called by hs.webview from the WebMessageReceived
+    -- handler with the RAW page string. The callback is invoked with a Hammerspoon-
+    -- SHAPED message TABLE, not the bare string: real WKWebView usercontent handlers
+    -- receive { body = <posted value>, name = <handler name>, ... }, and every mac/
+    -- consumer reads `message.body` (ms_shell/ms_loading/ms_devtools/ms_guardian/
+    -- ms_settings). Delivering the bare string left `message.body` nil, so their
+    -- json.decode saw "" and every bridge message was silently dropped -- which is
+    -- exactly why the shell's `ready` handshake timed out. `.body` is the string the
+    -- page posted; consumers hs.json.decode it themselves.
+    -- Guarded so a throwing consumer callback can never unwind across the FFI boundary
+    -- in the parent's Invoke (a throw there is a hard crash).
+    function Controller:_deliver(rawString)
         local fn = self._callback
         if not fn then return end
-        local ok, err = pcall(fn, message)
+        local msg = { body = rawString, name = self._name }
+        local ok, err = pcall(fn, msg)
         if not ok then
             io.stderr:write("hs.webview.usercontent callback error: " .. tostring(err) .. "\n")
         end
