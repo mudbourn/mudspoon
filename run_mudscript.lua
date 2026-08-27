@@ -373,7 +373,7 @@
             local ffi = require("ffi")
             if package.config:sub(1, 1) == "\\" then
                 ffi.cdef([[ unsigned long GetCurrentProcessId(void); ]])
-                return tonumber(ffi.C.GetCurrentProcessId())
+                return tonumber(ffi.load("kernel32").GetCurrentProcessId())
             else
                 ffi.cdef([[ int getpid(void); ]])
                 return tonumber(ffi.C.getpid())

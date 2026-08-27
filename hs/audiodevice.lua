@@ -33,7 +33,6 @@
 -- END --
 
 local ffi  = require("ffi")
-local bit  = require("bit")
 local host = require("hs.foundation")
 local K    = host.C.kernel32
 
@@ -74,7 +73,7 @@ typedef struct _PROPVARIANT {
     unsigned short wReserved1;
     unsigned short wReserved2;
     unsigned short wReserved3;
-    union { LPWSTR pwszVal; void* ptr; } val;
+    union { unsigned short* pwszVal; void* ptr; } val;
 } PROPVARIANT;
 
 /* --- ole32 --- */
@@ -84,7 +83,7 @@ void CoTaskMemFree(void*);
 long PropVariantClear(PROPVARIANT*);
 
 /* --- kernel32: UTF-16 endpoint id / friendly name -> UTF-8 --- */
-int WideCharToMultiByte(unsigned int, unsigned long, LPCWSTR, int, LPSTR, int, LPCSTR, void*);
+int WideCharToMultiByte(unsigned int, unsigned long, const unsigned short*, int, char*, int, LPCSTR, void*);
 
 /* --- COM interfaces WE CALL. Each vtable is IUnknown(0..2) then the interface's
  * methods in EXACT SDK order; slots we never call are void* pad_* placeholders to
@@ -97,62 +96,62 @@ typedef struct IPropertyStore      IPropertyStore;
 typedef struct IAudioEndpointVolume IAudioEndpointVolume;
 
 typedef struct IMMDeviceEnumeratorVtbl {
-    HRESULT (__stdcall *QueryInterface)(IMMDeviceEnumerator*, const GUID*, void**);
-    ULONG   (__stdcall *AddRef)(IMMDeviceEnumerator*);
-    ULONG   (__stdcall *Release)(IMMDeviceEnumerator*);
-    HRESULT (__stdcall *EnumAudioEndpoints)(IMMDeviceEnumerator*, int, DWORD, IMMDeviceCollection**); /* 3 */
-    HRESULT (__stdcall *GetDefaultAudioEndpoint)(IMMDeviceEnumerator*, int, int, IMMDevice**);        /* 4 */
+    long (__stdcall *QueryInterface)(IMMDeviceEnumerator*, const GUID*, void**);
+    unsigned long   (__stdcall *AddRef)(IMMDeviceEnumerator*);
+    unsigned long   (__stdcall *Release)(IMMDeviceEnumerator*);
+    long (__stdcall *EnumAudioEndpoints)(IMMDeviceEnumerator*, int, DWORD, IMMDeviceCollection**); /* 3 */
+    long (__stdcall *GetDefaultAudioEndpoint)(IMMDeviceEnumerator*, int, int, IMMDevice**);        /* 4 */
     /* GetDevice(5), RegisterEndpointNotificationCallback(6), Unregister(7) unused */
 } IMMDeviceEnumeratorVtbl;
 struct IMMDeviceEnumerator { IMMDeviceEnumeratorVtbl* lpVtbl; };
 
 typedef struct IMMDeviceCollectionVtbl {
-    HRESULT (__stdcall *QueryInterface)(IMMDeviceCollection*, const GUID*, void**);
-    ULONG   (__stdcall *AddRef)(IMMDeviceCollection*);
-    ULONG   (__stdcall *Release)(IMMDeviceCollection*);
-    HRESULT (__stdcall *GetCount)(IMMDeviceCollection*, UINT*);            /* 3 */
-    HRESULT (__stdcall *Item)(IMMDeviceCollection*, UINT, IMMDevice**);    /* 4 */
+    long (__stdcall *QueryInterface)(IMMDeviceCollection*, const GUID*, void**);
+    unsigned long   (__stdcall *AddRef)(IMMDeviceCollection*);
+    unsigned long   (__stdcall *Release)(IMMDeviceCollection*);
+    long (__stdcall *GetCount)(IMMDeviceCollection*, UINT*);            /* 3 */
+    long (__stdcall *Item)(IMMDeviceCollection*, UINT, IMMDevice**);    /* 4 */
 } IMMDeviceCollectionVtbl;
 struct IMMDeviceCollection { IMMDeviceCollectionVtbl* lpVtbl; };
 
 typedef struct IMMDeviceVtbl {
-    HRESULT (__stdcall *QueryInterface)(IMMDevice*, const GUID*, void**);
-    ULONG   (__stdcall *AddRef)(IMMDevice*);
-    ULONG   (__stdcall *Release)(IMMDevice*);
-    HRESULT (__stdcall *Activate)(IMMDevice*, const GUID*, DWORD, PROPVARIANT*, void**); /* 3 */
-    HRESULT (__stdcall *OpenPropertyStore)(IMMDevice*, DWORD, IPropertyStore**);          /* 4 */
-    HRESULT (__stdcall *GetId)(IMMDevice*, LPWSTR*);                                       /* 5 */
-    HRESULT (__stdcall *GetState)(IMMDevice*, DWORD*);                                     /* 6 */
+    long (__stdcall *QueryInterface)(IMMDevice*, const GUID*, void**);
+    unsigned long   (__stdcall *AddRef)(IMMDevice*);
+    unsigned long   (__stdcall *Release)(IMMDevice*);
+    long (__stdcall *Activate)(IMMDevice*, const GUID*, DWORD, PROPVARIANT*, void**); /* 3 */
+    long (__stdcall *OpenPropertyStore)(IMMDevice*, DWORD, IPropertyStore**);          /* 4 */
+    long (__stdcall *GetId)(IMMDevice*, unsigned short**);                                       /* 5 */
+    long (__stdcall *GetState)(IMMDevice*, DWORD*);                                     /* 6 */
 } IMMDeviceVtbl;
 struct IMMDevice { IMMDeviceVtbl* lpVtbl; };
 
 typedef struct IPropertyStoreVtbl {
-    HRESULT (__stdcall *QueryInterface)(IPropertyStore*, const GUID*, void**);
-    ULONG   (__stdcall *AddRef)(IPropertyStore*);
-    ULONG   (__stdcall *Release)(IPropertyStore*);
-    HRESULT (__stdcall *GetCount)(IPropertyStore*, DWORD*);                       /* 3 */
-    HRESULT (__stdcall *GetAt)(IPropertyStore*, DWORD, PROPERTYKEY*);             /* 4 */
-    HRESULT (__stdcall *GetValue)(IPropertyStore*, const PROPERTYKEY*, PROPVARIANT*); /* 5 */
+    long (__stdcall *QueryInterface)(IPropertyStore*, const GUID*, void**);
+    unsigned long   (__stdcall *AddRef)(IPropertyStore*);
+    unsigned long   (__stdcall *Release)(IPropertyStore*);
+    long (__stdcall *GetCount)(IPropertyStore*, DWORD*);                       /* 3 */
+    long (__stdcall *GetAt)(IPropertyStore*, DWORD, PROPERTYKEY*);             /* 4 */
+    long (__stdcall *GetValue)(IPropertyStore*, const PROPERTYKEY*, PROPVARIANT*); /* 5 */
 } IPropertyStoreVtbl;
 struct IPropertyStore { IPropertyStoreVtbl* lpVtbl; };
 
 typedef struct IAudioEndpointVolumeVtbl {
-    HRESULT (__stdcall *QueryInterface)(IAudioEndpointVolume*, const GUID*, void**);
-    ULONG   (__stdcall *AddRef)(IAudioEndpointVolume*);
-    ULONG   (__stdcall *Release)(IAudioEndpointVolume*);
+    long (__stdcall *QueryInterface)(IAudioEndpointVolume*, const GUID*, void**);
+    unsigned long   (__stdcall *AddRef)(IAudioEndpointVolume*);
+    unsigned long   (__stdcall *Release)(IAudioEndpointVolume*);
     void* pad_RegisterControlChangeNotify;                                        /* 3 */
     void* pad_UnregisterControlChangeNotify;                                      /* 4 */
     void* pad_GetChannelCount;                                                    /* 5 */
     void* pad_SetMasterVolumeLevel;                                               /* 6 */
-    HRESULT (__stdcall *SetMasterVolumeLevelScalar)(IAudioEndpointVolume*, float, const GUID*); /* 7 */
+    long (__stdcall *SetMasterVolumeLevelScalar)(IAudioEndpointVolume*, float, const GUID*); /* 7 */
     void* pad_GetMasterVolumeLevel;                                               /* 8 */
-    HRESULT (__stdcall *GetMasterVolumeLevelScalar)(IAudioEndpointVolume*, float*); /* 9 */
+    long (__stdcall *GetMasterVolumeLevelScalar)(IAudioEndpointVolume*, float*); /* 9 */
     void* pad_SetChannelVolumeLevel;                                              /* 10 */
     void* pad_SetChannelVolumeLevelScalar;                                        /* 11 */
     void* pad_GetChannelVolumeLevel;                                              /* 12 */
     void* pad_GetChannelVolumeLevelScalar;                                        /* 13 */
-    HRESULT (__stdcall *SetMute)(IAudioEndpointVolume*, BOOL, const GUID*);       /* 14 */
-    HRESULT (__stdcall *GetMute)(IAudioEndpointVolume*, BOOL*);                   /* 15 */
+    long (__stdcall *SetMute)(IAudioEndpointVolume*, BOOL, const GUID*);       /* 14 */
+    long (__stdcall *GetMute)(IAudioEndpointVolume*, BOOL*);                   /* 15 */
 } IAudioEndpointVolumeVtbl;
 struct IAudioEndpointVolume { IAudioEndpointVolumeVtbl* lpVtbl; };
 ]])
@@ -270,7 +269,7 @@ struct IAudioEndpointVolume { IAudioEndpointVolumeVtbl* lpVtbl; };
     function Device:uid()
         if self._uid then return self._uid end
         local ok, id = pcall(function()
-            local pp = ffi.new("LPWSTR[1]")
+            local pp = ffi.new("unsigned short*[1]")
             local hr = self._dev.lpVtbl.GetId(self._dev, pp)
             if hr ~= S_OK or pp[0] == nil then error("GetId hr=" .. tostring(hr)) end
             local s = fromWide(pp[0])
