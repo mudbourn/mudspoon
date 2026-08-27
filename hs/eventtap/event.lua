@@ -353,8 +353,30 @@ local event = {}
         }
     end
 
+    -- Real Hammerspoon's event.types.* are integer CGEventType values, and callers
+    -- written against mac (ms_core's "release stuck mouse buttons" startup pass)
+    -- pass those raw integers -- e.g. newMouseEvent(2, pos) for a left-button-up.
+    -- Our event.types are strings (see above), so translate the CGEventType ints
+    -- back to the string type this module dispatches on. Dragged types collapse to
+    -- mouseMoved (SendInput has no drag verb; a move with a button held is a drag).
+    local CG_EVENT_TYPE = {
+        [1]  = "leftMouseDown",  [2]  = "leftMouseUp",
+        [3]  = "rightMouseDown", [4]  = "rightMouseUp",
+        [5]  = "mouseMoved",
+        [6]  = "mouseMoved",     [7]  = "mouseMoved",   -- left/right dragged
+        [22] = "scrollWheel",
+        [25] = "otherMouseDown", [26] = "otherMouseUp",
+        [27] = "mouseMoved",                            -- other dragged
+    }
+
     -- hs.eventtap.event.newMouseEvent(type, point, [mods])
+    --   type : a shim string type, or a raw integer CGEventType (mac callers).
     function event.newMouseEvent(t, point, mods)
+        if type(t) == "number" then
+            local s = CG_EVENT_TYPE[t]
+            if not s then error("unknown mouse CGEventType: " .. tostring(t), 2) end
+            t = s
+        end
         point = point or {}
         return host.newEvent{
             type  = t,

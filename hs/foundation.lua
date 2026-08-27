@@ -302,6 +302,12 @@ local host = {
         [WM_KEYUP]      = "keyUp",    [WM_SYSKEYUP]   = "keyUp",
     }
 
+    -- Held-key set, keyed by vkCode, for autorepeat detection. The LL keyboard hook
+    -- gives no repeat flag (unlike WM_KEYDOWN's lParam bit 30, unavailable here), so
+    -- hardware autorepeat shows up as consecutive keyDowns with no intervening keyUp.
+    -- A keyDown for a vk already marked held is a repeat -> keyboardEventAutorepeat.
+    local keyHeld = {}
+
     -- Which button each down/up message owns, and the drag type to emit while it
     -- is held. Highest-priority held button (left > right > other) names the drag,
     -- mirroring hs, which reports one *Dragged type per move.
@@ -362,6 +368,16 @@ local host = {
                     local kb    = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
                     local extra = tonumber(kb.dwExtraInfo)
                     local vk    = tonumber(kb.vkCode)
+                    -- Autorepeat: a keyDown for a key already held (no keyUp since) is
+                    -- a hardware repeat. Update held-state off the raw down/up type,
+                    -- before t is possibly rewritten to flagsChanged below.
+                    local autorepeat = false
+                    if t == "keyDown" then
+                        autorepeat = keyHeld[vk] == true
+                        keyHeld[vk] = true
+                    elseif t == "keyUp" then
+                        keyHeld[vk] = nil
+                    end
                     -- A modifier key transition is a flagsChanged, not keyDown/keyUp
                     -- (hs contract). currentFlags() reads real-time async state, so
                     -- by the time this fires the pressed/released bit is settled.
@@ -371,9 +387,10 @@ local host = {
                         keyCode = vk,
                         flags   = currentFlags(),
                         props   = {
-                            scanCode = tonumber(kb.scanCode),
-                            injected = bit.band(kb.flags, LLKHF_INJECTED) ~= 0,
-                            extra    = extra,
+                            scanCode   = tonumber(kb.scanCode),
+                            injected   = bit.band(kb.flags, LLKHF_INJECTED) ~= 0,
+                            autorepeat = autorepeat,
+                            extra      = extra,
                         },
                     }
                     if dispatch(keySubs, ev) then swallow = true end

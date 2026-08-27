@@ -85,11 +85,18 @@ BOOL   SetForegroundWindow(HWND);
     -- compares this against target names like "RobloxPlayerBeta", so strip the ext.
     function App:name()
         if self._name == nil then
+            -- imagePath can fail transiently (handle not yet openable early in a
+            -- process's life, momentary access denial). Only cache a successful
+            -- lookup; on failure leave _name nil so the next call retries rather
+            -- than pinning a permanent false.
             local b = baseName(imagePath(self._pid))
-            if b then b = b:gsub("%.[eE][xX][eE]$", "") end
-            self._name = b or false
+            if b then
+                b = b:gsub("%.[eE][xX][eE]$", "")
+                self._name = b
+            end
+            return b
         end
-        return self._name or nil
+        return self._name
     end
 
     -- :title() -> alias of :name() (Windows has no separate app title).
