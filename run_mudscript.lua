@@ -275,6 +275,11 @@
     -- (there is no hs/eventtap.lua). init.lua already assembled the aggregate table
     -- as hs.eventtap (tap + .event); alias the bare require name to it via preload.
     package.preload["hs.eventtap"] = function() return hs.eventtap end
+
+    -- hs.window.filter is a real submodule (Win32 SetWinEventHook). mac/ both
+    -- require()s "hs.window.filter" and reaches it as hs.window.filter, so hang it on
+    -- the loaded hs.window table (require() resolves the file on its own via package.path).
+    if hs.window then hs.window.filter = require("hs.window.filter") end
 -- END --
 
 -- Route os.execute through the POSIX sh too (Windows) --
@@ -319,7 +324,6 @@
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
-        "window.filter",
         "uielement", "axuielement",
         "chooser",
     }
