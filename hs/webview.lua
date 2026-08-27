@@ -605,10 +605,22 @@ webview.usercontent = usercontent
     end
 
     -- :bringToFront() -- raise above other top-most windows without stealing focus.
+    -- CRITICAL: on macOS a WKWebView paints as soon as its window is on screen, so
+    -- mudscript reveals the shell/popouts with bringToFront alone (ms_shell.lua never
+    -- calls :show()). On WebView2 the CONTROLLER has its own IsVisible flag, and our
+    -- bring-up forces it to 0 (put_IsVisible at ctrl-Invoke, _visible defaults false).
+    -- Nothing else turns it back on for the shell -- so raising the HWND showed a
+    -- LAYERED window whose controller painted nothing => fully transparent = invisible
+    -- (alerts, which are canvas not WebView2, stayed visible -- the tell). So raising
+    -- to front must ALSO make the controller visible, matching the macOS semantics.
     function Webview:bringToFront()
         if self._deleted then return self end
         U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                        bit.bor(SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW))
+        self._visible = true
+        whenReady(self, function()
+            self._controller.lpVtbl.put_IsVisible(self._controller, 1)
+        end)
         return self
     end
 
