@@ -790,6 +790,50 @@ webview.usercontent = usercontent
         msgObj.lpVtbl = msgVt
         self._msgObj = msgObj  -- also anchored on the object for clarity
 
+        -- NavigationCompleted handler: page-navigation -> Lua. Reads self._navCallback
+        -- live, so it is a no-op until :navigationCallback(fn) sets one.
+        local navObj = ffi.new("NavHandler")
+        local navVt  = ffi.new("NavHandlerVtbl")
+        navVt.QueryInterface = qiCast
+        navVt.AddRef         = addRefCast
+        navVt.Release        = relCast
+        navVt.Invoke = keep(ffi.cast("HRESULT (__stdcall *)(void*, void*, void*)",
+            function(_this, _sender, argsPtr)
+                trace("nav Invoke: entered")
+                -- Guarded: never throw across the FFI boundary out of a COM callback.
+                pcall(function()
+                    local fn = self._navCallback
+                    if fn == nil or argsPtr == nil then return end
+                    local args = ffi.cast("ICoreWebView2NavigationCompletedEventArgs*", argsPtr)
+
+                    local okBuf = ffi.new("BOOL[1]")
+                    args.lpVtbl.get_IsSuccess(args, okBuf)
+
+                    -- NavigationId is a UINT64; Hammerspoon reports navID as a string.
+                    local idBuf = ffi.new("unsigned long long[1]")
+                    args.lpVtbl.get_NavigationId(args, idBuf)
+                    local navID = (tostring(idBuf[0]):gsub("[uUlL]+$", ""))
+
+                    if okBuf[0] ~= 0 then
+                        trace("nav Invoke: didFinishNavigation navID=" .. navID)
+                        fn("didFinishNavigation", self, navID)
+                    else
+                        local errBuf = ffi.new("int[1]")
+                        args.lpVtbl.get_WebErrorStatus(args, errBuf)
+                        local code = tonumber(errBuf[0])
+                        trace("nav Invoke: didFailNavigation navID=" .. navID .. " status=" .. tostring(code))
+                        fn("didFailNavigation", self, navID, {
+                            code        = code,
+                            description = "WebView2 navigation failed (WebErrorStatus " .. tostring(code) .. ")",
+                        })
+                    end
+                end)
+                return S_OK
+            end))
+        keep(navObj); keep(navVt)
+        navObj.lpVtbl = navVt
+        self._navObj = navObj
+
         -- Controller-completed handler: gives us the ICoreWebView2Controller.
         local ctrlObj = ffi.new("CtrlHandler")
         local ctrlVt  = ffi.new("CtrlHandlerVtbl")
@@ -850,6 +894,12 @@ webview.usercontent = usercontent
                         trace("ctrl Invoke: add_WebMessageReceived (vtbl slot 34)")
                         local token = ffi.new("EventRegistrationToken")
                         self._core.lpVtbl.add_WebMessageReceived(self._core, self._msgObj, token)
+
+                        -- Wire NavigationCompleted -> :navigationCallback. Registered
+                        -- unconditionally; the handler no-ops until a callback is set.
+                        trace("ctrl Invoke: add_NavigationCompleted (vtbl slot 15)")
+                        local navToken = ffi.new("EventRegistrationToken")
+                        self._core.lpVtbl.add_NavigationCompleted(self._core, self._navObj, navToken)
                     end
 
                     -- Size + visibility now that the controller exists.
@@ -957,6 +1007,7 @@ webview.usercontent = usercontent
             _rect           = r,
             _prefs          = prefs or {},
             _ucc            = usercontentController,  -- may be nil
+            _navCallback    = nil,                    -- set by :navigationCallback(fn)
             _queue          = {},                     -- deferred ops until core ready
             _controller     = nil,
             _core           = nil,
