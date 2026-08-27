@@ -231,10 +231,13 @@ local task = {}
             if self._streamFn then
                 local chunk; chunk, self._outPos = readFrom(self._outPath, self._outPos)
                 if chunk ~= "" then
-                    local cont = pcall(self._streamFn, self, chunk, "")
-                    -- streamFn returning false asks us to stop reading (hs contract);
-                    -- we keep polling for exit but honor it by not forcing more reads.
-                    if cont == false then end
+                    -- hs contract: the streaming callback returns true to keep receiving
+                    -- output, false to stop. pcall's 1st result is its own ok flag, so we
+                    -- must read the 2nd (the callback's return). On an explicit false we
+                    -- drop the streamFn -- no more stream callbacks -- while still polling
+                    -- for exit so the done callback and cleanup still fire.
+                    local ok, ret = pcall(self._streamFn, self, chunk, "")
+                    if ok and ret == false then self._streamFn = nil end
                 end
             end
             if self._hProc and K.WaitForSingleObject(self._hProc, 0) == WAIT_OBJECT_0 then

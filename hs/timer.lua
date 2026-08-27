@@ -82,6 +82,10 @@ local timer = {}
     function timer.doEvery(interval, fn)
         return timer.new(interval, fn):start()
     end
+
+    -- Diagnostic passthrough: live (uncancelled) scheduled-timer count on the pump.
+    -- mudscript-only; not part of Hammerspoon's API. Used to detect timer leaks.
+    timer._activeCount = host.timerCount
 -- END --
 
 -- Time helpers --
@@ -91,9 +95,19 @@ local timer = {}
     function timer.days(n)    return n * 86400   end
     function timer.weeks(n)   return n * 604800  end
 
-    -- Wall-clock seconds since the epoch (integer resolution; os.time).
+    -- Wall-clock seconds since the epoch, FRACTIONAL -- matching Hammerspoon, whose
+    -- secondsSinceEpoch() is gettimeofday-backed (sub-second). os.time() alone is
+    -- integer-quantized, which silently breaks every sub-second consumer: hotkey-latch
+    -- aging (ms_core _HOTKEY_LATCH_MAX), countdown displays, and worst of all
+    -- (now - t0)*1000 "elapsed ms" readouts that would snap to multiples of 1000.
+    -- Anchor the integer wall-second captured at load to the monotonic QPC clock and
+    -- add the fractional offset since. Absolute value tracks wall time to within the
+    -- <1s load-time rounding, but every mac/ call site takes a DELTA of two readings,
+    -- where that constant anchor cancels and the sub-ms QPC resolution is exact.
+    local _epochAnchor = os.time()
+    local _nowAnchor   = host.now()
     function timer.secondsSinceEpoch()
-        return os.time()
+        return _epochAnchor + (host.now() - _nowAnchor) / 1000.0
     end
 
     -- Monotonic time in nanoseconds, matching Hammerspoon's absoluteTime shape.

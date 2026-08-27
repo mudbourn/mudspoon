@@ -239,6 +239,15 @@ local host = {
     end
     host.schedule = schedule
 
+    -- Live (uncancelled) scheduled-timer count. Diagnostic: every timer sits on this
+    -- one pump, so a monotonically climbing count across an action = a timer leak, and
+    -- the pump gets slower the longer this grows. Cheap O(n) walk; call sparingly.
+    function host.timerCount()
+        local c = 0
+        for _ in pairs(timers) do c = c + 1 end
+        return c
+    end
+
     -- Milliseconds until the soonest due timer, or nil if none. Clamped to >= 0.
     local function nextTimeout()
         local n, best = host.now(), nil

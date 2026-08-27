@@ -519,10 +519,39 @@ webview.usercontent = usercontent
         return self
     end
 
+    -- JS<->Lua bridge shim. The shared mudscript UI posts to Lua with the WKWebView
+    -- API `window.webkit.messageHandlers.<name>.postMessage(s)` (see ui/ms_shell.html
+    -- shellDispatch). WebView2 has no `window.webkit`, so that call THREW and was
+    -- swallowed by the page's try/catch -- the shell's `ready` message never arrived,
+    -- `_shellReady` stayed false, and the window sat at alpha 0 (invisible). WebView2's
+    -- own page->host channel is `window.chrome.webview.postMessage`, which our
+    -- WebMessageReceived handler delivers to the usercontent callback. This shim maps
+    -- the former onto the latter. Guarded: it is a no-op where a real `window.webkit`
+    -- bridge exists (macOS), and where neither channel exists it leaves the page as-is.
+    local BRIDGE_SHIM = table.concat({
+        "<script>(function(){",
+        "if(window.webkit&&window.webkit.messageHandlers)return;",
+        "var cw=window.chrome&&window.chrome.webview;if(!cw)return;",
+        "var H={},mk=function(){return{postMessage:function(s){cw.postMessage(String(s));}};};",
+        "window.webkit={messageHandlers:new Proxy({},{get:function(_,n){",
+        "return H[n]||(H[n]=mk());}})};",
+        "})();</script>",
+    })
+
+    -- Insert the bridge shim so it runs before the page's own scripts: right after the
+    -- opening <head> if present, else prepended to the document.
+    local function injectBridge(str)
+        if type(str) ~= "string" then return str end
+        if str:find("<head", 1, true) then
+            return (str:gsub("(<head[^>]*>)", function(h) return h .. BRIDGE_SHIM end, 1))
+        end
+        return BRIDGE_SHIM .. str
+    end
+
     -- :html(str) -- load an HTML string (NavigateToString). Deferred until ready.
     function Webview:html(str)
         if NO_HTML then trace(":html() suppressed (MUDSPOON_WEBVIEW_NOHTML)"); return self end
-        local w = toWide(str)
+        local w = toWide(injectBridge(str))
         whenReady(self, function()
             self._html_keep = w  -- hold the wide buffer across the (sync-copying) call
             trace(":html flush -> NavigateToString")
