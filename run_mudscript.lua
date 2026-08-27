@@ -366,7 +366,15 @@
     hs.accessibilityState = function() return true end   -- Win32 has no AX gate
     hs.openConsole        = function() end                 -- no console window yet
     hs.loadSpoon          = function() return nil end      -- plugins not wired yet
-    hs.processInfo        = { bundleID = "org.mudspoon", processID = 0 }
+    -- processID: the real Win32 PID (mudscript reads hs.processInfo.processID).
+    -- GetCurrentProcessId returns DWORD; declared with a plain type, no typedef, so
+    -- it cannot collide with any module's cdef. Falls back to 0 if the call fails.
+    local realPID = 0
+    pcall(function()
+        ffi.cdef("unsigned long GetCurrentProcessId(void);")
+        realPID = tonumber(ffi.load("kernel32").GetCurrentProcessId())
+    end)
+    hs.processInfo        = { bundleID = "org.mudspoon", processID = realPID }
 -- END --
 
 -- Boot: run the entry file, then drive the runloop --

@@ -95,6 +95,25 @@ local timer = {}
     function timer.days(n)    return n * 86400   end
     function timer.weeks(n)   return n * 604800  end
 
+    -- usleep(us): BLOCKING sleep for `us` MICROSECONDS, matching Hammerspoon. This
+    -- is a hard block of the single runloop thread by design -- callers use it for
+    -- precise inter-keystroke gaps (ms_core synthetic input), where returning early
+    -- or yielding to the pump would reorder events. Sleep() handles the bulk (yields
+    -- the CPU, ~1ms granularity); the final <2ms is busy-waited against host.now()
+    -- (the same QPC clock the scheduler uses) for the sub-millisecond accuracy that
+    -- Sleep alone cannot give. `Sleep` is cdef'd here only -- foundation never declares
+    -- it, so there is no duplicate-typedef clash.
+    local ffi = require("ffi")
+    ffi.cdef("void Sleep(unsigned long);")
+    local K = (host.C and host.C.kernel32) or ffi.load("kernel32")
+    function timer.usleep(us)
+        if not us or us <= 0 then return end
+        local targetMs = host.now() + us / 1000.0
+        local remainMs = targetMs - host.now()
+        if remainMs > 2 then K.Sleep(math.floor(remainMs) - 1) end
+        while host.now() < targetMs do end  -- spin out the sub-ms remainder
+    end
+
     -- Wall-clock seconds since the epoch, FRACTIONAL -- matching Hammerspoon, whose
     -- secondsSinceEpoch() is gettimeofday-backed (sub-second). os.time() alone is
     -- integer-quantized, which silently breaks every sub-second consumer: hotkey-latch
