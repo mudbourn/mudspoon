@@ -65,9 +65,13 @@ HICON LoadIconA(HINSTANCE, LPCSTR);
 -- END --
 
 -- Shared hidden message window + one default icon (lazy) --
-    local wndProc = ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
+    -- jit.off: never JIT-trace a callback body (see hs.foundation) -- an error
+    -- unwinding out of compiled mcode across the FFI boundary panics LuaJIT.
+    local function wndProcFn(hwnd, msg, wp, lp)
         return U.DefWindowProcA(hwnd, msg, wp, lp)
-    end)
+    end
+    jit.off(wndProcFn, true)
+    local wndProc = ffi.cast("WNDPROC", wndProcFn)
 
     local classBuf = ffi.new("char[?]", #CLASS + 1)
     ffi.copy(classBuf, CLASS)

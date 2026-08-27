@@ -28,8 +28,19 @@
     -- mudscript installs into $HOME/.hammerspoon (see mac/install.sh) and addresses
     -- itself through os.getenv("HOME").."/.hammerspoon/..." all over, NOT hs.configdir.
     -- So HOME is the anchor. On the rig it is the dir CONTAINING .hammerspoon.
+    -- Default anchor: whichever candidate actually contains a .hammerspoon/init.lua.
+    -- The tree used to live at ../mudscript/.hammerspoon; it now sits at ../.hammerspoon
+    -- (a sibling of this repo). Probe the new layout first, then the legacy one, so a
+    -- bare `luajit run_mudscript.lua` works either way. An explicit arg / MUDSCRIPT_HOME
+    -- always wins.
+    local function hasConfig(dir)
+        local fh = io.open(dir .. "/.hammerspoon/init.lua", "r")
+        if fh then fh:close(); return true end
+        return false
+    end
     local homeDir = arg[1]
                   or os.getenv("MUDSCRIPT_HOME")
+                  or (hasConfig(here .. "..") and (here .. ".."))
                   or (here .. "../mudscript")
     homeDir = homeDir:gsub("[/\\]+$", "")            -- strip trailing slash
 
@@ -265,7 +276,7 @@
 
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
-        "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement" }
+        "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -320,7 +331,6 @@
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
         "window.filter",
-        "focus",
         "processInfo",
         "chooser",
     }

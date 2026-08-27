@@ -112,7 +112,9 @@ int GdipCreateHICONFromBitmap(void*, void**);
     -- lParam = the mouse message. We route left/right button-up to the icon's click cb.
     local records = {}   -- uID -> menubar object
 
-    local wndProc = ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
+    -- jit.off: never JIT-trace a callback body -- an error unwinding out of compiled
+    -- mcode across the FFI boundary panics LuaJIT ("bad callback").
+    local function wndProcFn(hwnd, msg, wp, lp)
         if msg == CALLBACK_MSG then
             local mouse = bit.band(tonumber(lp), 0xFFFF)
             if mouse == WM_LBUTTONUP or mouse == WM_RBUTTONUP then
@@ -124,7 +126,9 @@ int GdipCreateHICONFromBitmap(void*, void**);
             return 0
         end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
-    end)
+    end
+    jit.off(wndProcFn, true)
+    local wndProc = ffi.cast("WNDPROC", wndProcFn)
 
     local classBuf = ffi.new("char[?]", #CLASS + 1)
     ffi.copy(classBuf, CLASS)

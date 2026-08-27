@@ -104,7 +104,9 @@ DWORD   SetTextColor(HDC, DWORD);
     -- A Lua error must NEVER unwind through this FFI boundary -- Windows calls it
     -- from inside DispatchMessage and a throw here is a hard crash. So the paint
     -- body is pcall-guarded; a bad paint yields a blank window, not a dead process.
-    local wndProc = ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
+    -- jit.off: never JIT-trace a callback body -- an error unwinding out of compiled
+    -- mcode across the FFI boundary panics LuaJIT ("bad callback").
+    local function wndProcFn(hwnd, msg, wp, lp)
         if msg == WM_PAINT then
             pcall(function()
                 local rec = records[keyOf(hwnd)]
@@ -131,7 +133,9 @@ DWORD   SetTextColor(HDC, DWORD);
             return 0
         end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
-    end)
+    end
+    jit.off(wndProcFn, true)
+    local wndProc = ffi.cast("WNDPROC", wndProcFn)
 -- END --
 
 -- Register the class once, lazily --

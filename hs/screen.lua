@@ -130,9 +130,10 @@ int  GetSystemMetrics(int);
 
     -- MONITORENUMPROC. Kept at module scope so the GC never frees the C callback
     -- while EnumDisplayMonitors still holds it (the standard LuaJIT FFI footgun).
-    local enumProc = ffi.cast("MONITORENUMPROC", function(hMonitor, _hdc, _lprc, _lparam)
-        -- Never let a Lua error unwind through EnumDisplayMonitors (FFI boundary):
-        -- a throw here is a hard crash. Skip the bad monitor, keep enumerating.
+    -- jit.off + pcall: never let a Lua error unwind through EnumDisplayMonitors (FFI
+    -- boundary) -- a throw, or an unwind out of JIT-compiled mcode, is a hard crash
+    -- ("bad callback"). Skip the bad monitor, keep enumerating.
+    local function enumProcFn(hMonitor, _hdc, _lprc, _lparam)
         pcall(function()
             local mi = ffi.new("MONITORINFOEXA")
             mi.cbSize = ffi.sizeof("MONITORINFOEXA")
@@ -152,7 +153,9 @@ int  GetSystemMetrics(int);
         end)
 
         return 1  -- TRUE: keep enumerating
-    end)
+    end
+    jit.off(enumProcFn, true)
+    local enumProc = ffi.cast("MONITORENUMPROC", enumProcFn)
 
     -- Fallback single screen from GetSystemMetrics, mirroring the spike's assumption. --
         -- Used only if EnumDisplayMonitors yields nothing (rare: session 0, headless).
@@ -207,6 +210,10 @@ int  GetSystemMetrics(int);
 
             return finish(raws)
         end
+        -- EnumDisplayMonitors synchronously invokes enumProc; keep this caller
+        -- interpreted so the callback is never entered from JIT mcode ("bad callback",
+        -- see hs.foundation host.run).
+        jit.off(screen.allScreens)
     -- END --
 
     -- hs.screen.primaryScreen() -> the primary display. --

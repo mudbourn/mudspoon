@@ -350,7 +350,12 @@ local host = {
         -- GC collect it and a late OS call hit freed memory -> "bad callback" panic,
         -- intermittently, whenever bind setup thrashed the hook while input flowed.
         if not keyProc then
-        keyProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+        -- The hook body is a plain Lua function (not the FFI callback itself) so it
+        -- can be jit.off'd and driven under pcall: an error must NEVER unwind out of
+        -- the ffi.cast callback across the OS-hook boundary. Under the JIT that unwind
+        -- lands in the middle of a compiled trace's mcode -> "PANIC: ... bad callback".
+        local function keyBody(nCode, wParam, lParam)
+            local swallow = false
             if nCode >= 0 then
                 local t = KEY_TYPE[tonumber(wParam)]
                 if t then
@@ -371,9 +376,16 @@ local host = {
                             extra    = extra,
                         },
                     }
-                    if dispatch(keySubs, ev) then return 1 end
+                    if dispatch(keySubs, ev) then swallow = true end
                 end
             end
+            return swallow
+        end
+        jit.off(keyBody, true)
+        keyProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+            local ok, swallow = pcall(keyBody, nCode, wParam, lParam)
+            if not ok then io.stderr:write("mudspoon key hook error: " .. tostring(swallow) .. "\n") end
+            if ok and swallow then return 1 end
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
         end
@@ -383,7 +395,10 @@ local host = {
 
     local function installMouseHook()
         if not mouseProc then
-        mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+        -- See keyBody above: jit.off'd body under pcall so no Lua error can unwind
+        -- out of the ffi.cast callback across the OS-hook boundary ("bad callback").
+        local function mouseBody(nCode, wParam, lParam)
+            local swallow = false
             if nCode >= 0 then
                 local wp = tonumber(wParam)
                 -- Track button state before typing the event so a move that arrives
@@ -415,9 +430,16 @@ local host = {
                             extra        = extra,
                         },
                     }
-                    if dispatch(mouseSubs, ev) then return 1 end
+                    if dispatch(mouseSubs, ev) then swallow = true end
                 end
             end
+            return swallow
+        end
+        jit.off(mouseBody, true)
+        mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+            local ok, swallow = pcall(mouseBody, nCode, wParam, lParam)
+            if not ok then io.stderr:write("mudspoon mouse hook error: " .. tostring(swallow) .. "\n") end
+            if ok and swallow then return 1 end
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
         end
@@ -473,6 +495,14 @@ local host = {
             runTimers()
         end
     end
+    -- Keep the pump loop INTERPRETED. PeekMessageA/DispatchMessageA/MsgWaitForMultiple-
+    -- Objects here synchronously invoke our FFI callbacks (wndProcs, and the LL keyboard/
+    -- mouse hooks). LuaJIT cannot enter a callback from JIT-compiled mcode -- doing so
+    -- raises "PANIC: unprotected error in call to Lua API (bad callback)". Compiling this
+    -- hot loop is exactly what made the panic intermittent (it fired once the loop got
+    -- hot, ~1s into boot). jit.off on the callbacks alone does NOT help; the offending
+    -- trace is the CALLER that makes the C call. Non-recursive: callees still JIT freely.
+    jit.off(host.run)
 
     -- Safe to call from a timer or an event handler (same thread). The current
     -- loop iteration finishes, then run() returns.

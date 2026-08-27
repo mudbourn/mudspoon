@@ -28,7 +28,30 @@ Three legs in one single-threaded process:
 
 `Ctrl+Alt+K` popping a fading alert and swallowing the K means the architecture holds.
 
-## Running
+## Running mudscript (one click)
+
+The Windows equivalent of double-clicking `Hammerspoon.app`. mudspoon is the host;
+mudscript is the config it loads from the sibling `../.hammerspoon`.
+
+**Double-click `Mudspoon.cmd`.**
+
+On first run it auto-installs whatever is missing via winget — LuaJIT (+ the VC++
+runtime), the WebView2 runtime (the shell and loading screens are WebView2, and are
+invisible without it), and a POSIX shell (Git for Windows) for mac/'s file ops — then
+boots the host **windowless and detached**, so it keeps running after the launcher
+window closes. Later launches skip straight past the checks.
+
+- `Mudspoon.cmd -Foreground` — run attached, streaming the boot log (Ctrl+C stops it).
+- `Mudspoon.cmd -NoWebview` — headless macro host, no WebView2 UI.
+- `Mudspoon.cmd -SkipDeps` — fastest re-launch, skip the dependency preflight.
+- `Stop-Mudspoon.cmd` — quit the windowless host from outside (its menubar quit also works).
+
+The launcher (`launch.ps1`) also sets `MUDSPOON_WEBVIEW=1` and puts the bundled
+`WebView2Loader.dll` on the DLL search path — the two steps that were previously
+manual and, if forgotten, left the whole UI invisible. Still a physical console
+session, not RDP: RDP intercepts input and misreports the low-level hooks.
+
+## Running the spikes / smoke tests
 
 On the Windows PC, at the physical console, foreground, not over RDP. RDP intercepts
 input and misreports hooks.

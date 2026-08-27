@@ -263,13 +263,16 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
     -- only pushes raw HWNDs into `collected`; all filtering happens in Lua after.
     local collected = {}
 
-    local enumProc = ffi.cast("WNDENUMPROC", function(hwnd, _lparam)
-        -- Never let a Lua error unwind across the FFI boundary (hard crash). Guard.
+    -- jit.off + pcall: never let a Lua error unwind across the FFI boundary (a throw,
+    -- or an unwind out of JIT-compiled mcode, is a hard crash -- "bad callback").
+    local function enumProcFn(hwnd, _lparam)
         pcall(function()
             collected[#collected + 1] = hwnd
         end)
         return 1  -- TRUE: keep enumerating
-    end)
+    end
+    jit.off(enumProcFn, true)
+    local enumProc = ffi.cast("WNDENUMPROC", enumProcFn)
 
     -- Raw list of every top-level HWND. Internal; callers get objects via allWindows.
     local function enumTopLevel()
@@ -280,6 +283,10 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         for i = 1, #collected do out[i] = collected[i] end
         return out
     end
+    -- EnumWindows synchronously invokes enumProc; if this caller were JIT-compiled the
+    -- callback would be entered from mcode -> "bad callback" panic (see hs.foundation's
+    -- host.run). allWindows() is called often by the macro recorder, so keep it cold.
+    jit.off(enumTopLevel)
 -- END --
 
 -- Public API --

@@ -269,7 +269,9 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
     -- No custom WM_PAINT drawing -- the layered content comes from UpdateLayeredWindow.
     -- WM_PAINT is just validated so Windows stops re-posting it; WM_ERASEBKGND is
     -- claimed so the window never blanks between frames. Mouse messages fire the cb.
-    local wndProc = ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
+    -- jit.off: a callback body must never be JIT-traced -- an error unwinding out of
+    -- compiled mcode across the FFI boundary panics LuaJIT ("bad callback").
+    local function wndProcFn(hwnd, msg, wp, lp)
         local rec = records[keyOf(hwnd)]
         if msg == WM_PAINT then
             local ps = ffi.new("PAINTSTRUCT"); U.BeginPaint(hwnd, ps); U.EndPaint(hwnd, ps)
@@ -312,7 +314,9 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
             return 0
         end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
-    end)
+    end
+    jit.off(wndProcFn, true)
+    local wndProc = ffi.cast("WNDPROC", wndProcFn)
 -- END --
 
 -- Register the class once, lazily --

@@ -106,6 +106,15 @@ local timer = {}
     local ffi = require("ffi")
     ffi.cdef("void Sleep(unsigned long);")
     local K = (host.C and host.C.kernel32) or ffi.load("kernel32")
+    -- Raise the system timer resolution to 1ms so Sleep() granularity drops from the
+    -- ~15.6ms default (which makes usleep(10000) overshoot to ~15ms) to ~1ms. This is
+    -- the standard move for input-automation hosts (AHK does the same); the busy-wait
+    -- below still trims the sub-ms remainder. Best-effort: pcall so a missing winmm
+    -- just leaves the coarser granularity rather than failing the module.
+    pcall(function()
+        ffi.cdef("unsigned int timeBeginPeriod(unsigned int);")
+        ffi.load("winmm").timeBeginPeriod(1)
+    end)
     function timer.usleep(us)
         if not us or us <= 0 then return end
         local targetMs = host.now() + us / 1000.0
