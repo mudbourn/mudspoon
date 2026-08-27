@@ -134,6 +134,9 @@ typedef const unsigned short* LPCWSTR;   /* UTF-16, NUL-terminated */
 typedef unsigned short*       LPWSTR;
 typedef char*                 LPSTR;      /* foundation declares LPCSTR, not LPSTR */
 typedef struct { long long value; } EventRegistrationToken;
+/* COREWEBVIEW2_COLOR: BYTE A,R,G,B, passed BY VALUE to put_DefaultBackgroundColor.
+ * A=0 => fully transparent default background (no opaque white first frame). */
+typedef struct { unsigned char A, R, G, B; } COREWEBVIEW2_COLOR;
 
 /* --- COM callback objects WE IMPLEMENT ---------------------------------------
  * We build these Lua-side. QueryInterface/AddRef/Release take a void* `this` so
@@ -218,6 +221,15 @@ typedef struct ICoreWebView2ControllerVtbl {
   void* pad_NotifyParentWindowPositionChanged;                              /* 23 */
   HRESULT (__stdcall *Close)(ICoreWebView2Controller*);                      /* 24 */
   HRESULT (__stdcall *get_CoreWebView2)(ICoreWebView2Controller*, ICoreWebView2**); /* 25 */
+  /* --- ICoreWebView2Controller2 additions (the runtime's controller object
+   * implements Controller2, whose vtable extends Controller's; these two slots
+   * follow get_CoreWebView2). Only put_DefaultBackgroundColor is called -- setting
+   * a transparent (A=0) default kills the opaque WHITE first-frame the control
+   * otherwise paints before the page's transparent-background CSS lands (the brief
+   * white flash on fade-in). RISK: valid only on Controller2-capable runtimes
+   * (Evergreen >= 1.0.774, ~2020); guarded by pcall at the call site. */
+  void*   pad_get_DefaultBackgroundColor;                                    /* 26 */
+  HRESULT (__stdcall *put_DefaultBackgroundColor)(ICoreWebView2Controller*, COREWEBVIEW2_COLOR); /* 27 */
 } ICoreWebView2ControllerVtbl;
 struct ICoreWebView2Controller { ICoreWebView2ControllerVtbl* lpVtbl; };
 
@@ -770,6 +782,17 @@ webview.usercontent = usercontent
                     -- core needs no extra AddRef -- only this borrowed callback arg does.)
                     controller.lpVtbl.AddRef(controller)
                     trace("ctrl Invoke: controller AddRef'd (retained past Invoke)")
+
+                    -- Transparent default background: without this the control paints an
+                    -- opaque WHITE first frame before the page's background:transparent CSS
+                    -- applies -- the brief white flash seen on fade-in. Guarded: a runtime
+                    -- too old for ICoreWebView2Controller2 just keeps the white default.
+                    pcall(function()
+                        local c = ffi.new("COREWEBVIEW2_COLOR")
+                        c.A, c.R, c.G, c.B = 0, 0, 0, 0
+                        controller.lpVtbl.put_DefaultBackgroundColor(controller, c)
+                        trace("ctrl Invoke: put_DefaultBackgroundColor(transparent) ok")
+                    end)
 
                     -- Fetch the CoreWebView2 we actually drive.
                     trace("ctrl Invoke: get_CoreWebView2 (vtbl slot 25)")

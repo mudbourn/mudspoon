@@ -84,6 +84,20 @@ BOOL DestroyIcon(HICON);
 
 /* GDI+ image -> HICON (gdiplus); Load/Dispose are owned by hs.canvas */
 int GdipCreateHICONFromBitmap(void*, void**);
+
+/* Native popup menu (user32). Nothing else in the tree declares these, so they
+   are owned here. GetCursorPos/SetForegroundWindow ARE declared by other modules
+   (mouse/focus/window/...), but LuaJIT tolerates an identical function redeclare
+   and those owners may not be require()'d by the time a right-click fires, so we
+   restate them here to guarantee they resolve on U. */
+HMENU CreatePopupMenu(void);
+BOOL  AppendMenuA(HMENU, UINT, uintptr_t, LPCSTR);
+BOOL  TrackPopupMenu(HMENU, UINT, int, int, int, HWND, const RECT*);
+BOOL  DestroyMenu(HMENU);
+BOOL  GetCursorPos(POINT*);
+BOOL  SetForegroundWindow(HWND);
+BOOL  PostMessageA(HWND, UINT, WPARAM, LPARAM);
+HICON LoadIconA(HINSTANCE, LPCSTR);
 ]]
 -- END --
 
@@ -101,6 +115,22 @@ int GdipCreateHICONFromBitmap(void*, void**);
 
     local WM_LBUTTONUP = 0x0202
     local WM_RBUTTONUP = 0x0205
+    local WM_NULL      = 0x0000
+
+    -- Popup-menu flags.
+    local MF_STRING    = 0x0000
+    local MF_SEPARATOR = 0x0800
+    local MF_GRAYED    = 0x0001
+    local MF_DISABLED  = 0x0002
+    local MF_CHECKED   = 0x0008
+
+    local TPM_LEFTALIGN  = 0x0000
+    local TPM_TOPALIGN   = 0x0000
+    local TPM_RIGHTBUTTON = 0x0002
+    local TPM_RETURNCMD  = 0x0100
+
+    -- Stock icon (IDI_APPLICATION) as the last-ditch fallback so the tray is never blank.
+    local IDI_APPLICATION = ffi.cast("LPCSTR", ffi.cast("uintptr_t", 32512))
 
     local HWND_MESSAGE = ffi.cast("HWND", ffi.cast("intptr_t", -3))
 
@@ -117,10 +147,19 @@ int GdipCreateHICONFromBitmap(void*, void**);
     local function wndProcFn(hwnd, msg, wp, lp)
         if msg == CALLBACK_MSG then
             local mouse = bit.band(tonumber(lp), 0xFFFF)
-            if mouse == WM_LBUTTONUP or mouse == WM_RBUTTONUP then
-                local rec = records[tonumber(wp)]
-                if rec and rec._clickCb then
-                    pcall(rec._clickCb)
+            local rec = records[tonumber(wp)]
+            if rec then
+                if mouse == WM_RBUTTONUP then
+                    -- Right-click: show the context menu (stored or default).
+                    pcall(function() rec:popupMenu() end)
+                elseif mouse == WM_LBUTTONUP then
+                    -- Left-click: honour an explicit click callback; otherwise, if a
+                    -- menu exists, show it (so a menu-only tray icon is still usable).
+                    if rec._clickCb then
+                        pcall(rec._clickCb)
+                    else
+                        pcall(function() rec:popupMenu() end)
+                    end
                 end
             end
             return 0
@@ -183,6 +222,115 @@ int GdipCreateHICONFromBitmap(void*, void**);
         if img[0] ~= nil then pcall(function() GP.GdipDisposeImage(img[0]) end) end
         return hicon
     end
+
+    -- Bundled fallback icon: <this-module-dir>/assets/ms_icon.png. mudscript points
+    -- setIcon at a generated .tiff that only its macOS build ever writes, so on Windows
+    -- that path is missing and the tray would be blank. Resolve a repo-shipped PNG so
+    -- there is always something to show. debug.getinfo gives this file's own path.
+    local bundledIconPath = (function()
+        local src = debug.getinfo(1, "S").source or ""
+        src = src:gsub("^@", "")
+        local dir = src:gsub("[^/\\]*$", "")
+        return dir .. "assets/ms_icon.png"
+    end)()
+
+    -- Stock IDI_APPLICATION HICON (shared, never DestroyIcon'd -- it is system-owned).
+    local stockHIcon = nil
+    local function stockIcon()
+        if stockHIcon == nil then
+            local ok, h = pcall(function() return U.LoadIconA(nil, IDI_APPLICATION) end)
+            stockHIcon = (ok and h ~= nil) and h or false
+        end
+        return stockHIcon or nil
+    end
+
+    -- Load `path`; on failure fall back to the bundled PNG, then the stock icon.
+    -- The second return value is true when the HICON is owned by us (must be
+    -- DestroyIcon'd on replace/delete) and false for the shared stock icon.
+    local function loadHIconOrDefault(path)
+        local h = path and loadHIcon(path)
+        if h then return h, true end
+        h = loadHIcon(bundledIconPath)
+        if h then return h, true end
+        return stockIcon(), false
+    end
+-- END --
+
+-- Native Win32 popup menu (real, unlike the old inert stub) --
+    -- hs.menubar menus are a list of items: { {title=, fn=, disabled=, checked=,
+    -- menu=<sublist>}, ... }; title "-" is a separator. hs also allows a FUNCTION
+    -- returning that list (rebuilt each popup). We map every actionable item to a
+    -- Win32 command id, build an HMENU, and TrackPopupMenu with TPM_RETURNCMD so the
+    -- chosen id comes back synchronously -- then dispatch its fn.
+    local MF_POPUP = 0x0010
+
+    local function resolveMenu(m)
+        if type(m) == "function" then
+            local ok, r = pcall(m)
+            return ok and r or nil
+        end
+        return m
+    end
+
+    -- Build an HMENU for `items`; records id->fn in cmdMap; ids allocated via counter.
+    local function buildMenu(items, cmdMap, counter)
+        local hm = U.CreatePopupMenu()
+        if hm == nil then return nil end
+        for _, it in ipairs(items or {}) do
+            local title = it.title
+            if title == "-" or it.separator then
+                U.AppendMenuA(hm, MF_SEPARATOR, 0, nil)
+            elseif type(it.menu) == "table" then
+                local sub = buildMenu(it.menu, cmdMap, counter)
+                if sub ~= nil then
+                    local buf = ffi.new("char[?]", #tostring(title or "") + 1)
+                    ffi.copy(buf, tostring(title or ""))
+                    U.AppendMenuA(hm, bit.bor(MF_STRING, MF_POPUP),
+                                  ffi.cast("uintptr_t", sub), buf)
+                end
+            else
+                local id = counter.n
+                counter.n = id + 1
+                cmdMap[id] = it.fn
+                local flags = MF_STRING
+                if it.disabled then flags = bit.bor(flags, MF_GRAYED) end
+                if it.checked  then flags = bit.bor(flags, MF_CHECKED) end
+                local buf = ffi.new("char[?]", #tostring(title or "") + 1)
+                ffi.copy(buf, tostring(title or ""))
+                U.AppendMenuA(hm, flags, id, buf)
+            end
+        end
+        return hm
+    end
+
+    -- Show `menu` (list or function) as a popup for tray object `self` at screen pt
+    -- {x=,y=} (defaults to the cursor). Returns after the user picks or dismisses.
+    local function showPopup(self, menu, pt)
+        local items = resolveMenu(menu)
+        if type(items) ~= "table" or #items == 0 then return end
+        local cmdMap, counter = {}, { n = 1 }
+        local hmenu = buildMenu(items, cmdMap, counter)
+        if hmenu == nil then return end
+
+        local x, y
+        if type(pt) == "table" and pt.x then
+            x, y = math.floor(pt.x), math.floor(pt.y)
+        else
+            local p = ffi.new("POINT")
+            if U.GetCursorPos(p) ~= 0 then x, y = p.x, p.y else x, y = 0, 0 end
+        end
+
+        -- Foreground dance: without SetForegroundWindow before + a posted message
+        -- after, the menu will not dismiss when the user clicks elsewhere (a
+        -- documented Win32 quirk of TrackPopupMenu on a background window).
+        U.SetForegroundWindow(self._hwnd)
+        local flags = bit.bor(TPM_LEFTALIGN, TPM_TOPALIGN, TPM_RIGHTBUTTON, TPM_RETURNCMD)
+        local cmd = tonumber(U.TrackPopupMenu(hmenu, flags, x, y, 0, self._hwnd, nil)) or 0
+        U.PostMessageA(self._hwnd, WM_NULL, 0, 0)
+        pcall(function() U.DestroyMenu(hmenu) end)   -- also frees submenus
+
+        if cmd > 0 and cmdMap[cmd] then pcall(cmdMap[cmd]) end
+    end
 -- END --
 
 local menubar = {}
@@ -211,12 +359,22 @@ local menubar = {}
         return SH.Shell_NotifyIconA(op, nid) ~= 0
     end
 
+    -- Destroy the current icon only if WE own it (the stock icon is system-owned).
+    local function dropIcon(self)
+        if self._hicon and self._hiconOwned then
+            pcall(function() U.DestroyIcon(self._hicon) end)
+        end
+        self._hicon, self._hiconOwned = nil, false
+    end
+
     function Menubar:setIcon(path, _template)   -- template flag accepted + ignored
         if self._deleted then return self end
-        local hicon = loadHIcon(path)
+        -- Always resolve to SOMETHING: the given path, else the bundled PNG, else the
+        -- stock app icon. A missing file must not leave the tray blank.
+        local hicon, owned = loadHIconOrDefault(path)
         if hicon then
-            if self._hicon then pcall(function() U.DestroyIcon(self._hicon) end) end
-            self._hicon = hicon
+            dropIcon(self)
+            self._hicon, self._hiconOwned = hicon, owned
             notify(self, NIM_MODIFY)
         end
         return self
@@ -236,9 +394,18 @@ local menubar = {}
         return self
     end
 
-    -- INERT by design: mudscript uses the shell UI, not native menus (no-native-selects).
+    -- Store the menu (a list, or a function returning one). Shown on tray click and
+    -- via :popupMenu. mudscript sets none, so tray objects fall back to the default
+    -- menu installed in menubar.new (Console / Reload / Quit).
     function Menubar:setMenu(t) self._menu = t; return self end
-    function Menubar:popupMenu(_pt, _dark) return self end
+
+    -- Draw the native popup now. pt is an optional {x=,y=} screen point; defaults to
+    -- the cursor. Uses the stored menu (or the default) -- real, no longer inert.
+    function Menubar:popupMenu(pt, _dark)
+        if self._deleted then return self end
+        showPopup(self, self._menu or self._defaultMenu, pt)
+        return self
+    end
 
     function Menubar:isInMenuBar() return not self._deleted end
 
@@ -267,7 +434,7 @@ local menubar = {}
         notify(self, NIM_DELETE)
         records[self._id] = nil
         self._deleted = true
-        if self._hicon then pcall(function() U.DestroyIcon(self._hicon) end); self._hicon = nil end
+        dropIcon(self)
         return self
     end
 -- END --
@@ -275,18 +442,55 @@ local menubar = {}
 -- Constructor --
     -- hs.menubar.new([inMenuBar]) -- inMenuBar defaults true. Adds the tray item now (icon
     -- set later via :setIcon). A false inMenuBar creates it detached (returnToMenuBar shows).
+    -- Default right-click menu for a tray icon that no one gave an explicit menu to
+    -- (mudscript never sets one on Windows). A FUNCTION so it is rebuilt per popup and
+    -- picks up the mudscript API (_G.ms) once it has finished booting. Every action is
+    -- guarded: it degrades to the hs-layer primitive, or no-ops, if ms is not up yet.
+    local function defaultMenuItems()
+        return {
+            { title = "Open Console", fn = function()
+                local ms = _G.ms
+                if ms and ms.dev and ms.dev.console and ms.dev.console.toggle then
+                    ms.dev.console.toggle()
+                elseif _G.hs and hs.openConsole then
+                    hs.openConsole()
+                end
+            end },
+            { title = "Reload Config", fn = function()
+                local ms = _G.ms
+                if ms and ms.restart then ms.restart()
+                elseif _G.hs and hs.reload then hs.reload() end
+            end },
+            { title = "-" },
+            { title = "Quit mudscript", fn = function()
+                local ms = _G.ms
+                if ms and ms.shutdown then ms.shutdown()
+                elseif _G.hs and hs.shutdown then hs.shutdown()
+                else os.exit(0) end
+            end },
+        }
+    end
+
     function menubar.new(inMenuBar)
         local hwnd = ensureMsgWindow()
         local self = setmetatable({
-            _id      = nextId,
-            _hwnd    = hwnd,
-            _hicon   = nil,
-            _tip     = "mudscript",
-            _clickCb = nil,
-            _menu    = nil,
-            _deleted = true,   -- flipped false by the NIM_ADD below when shown
+            _id          = nextId,
+            _hwnd        = hwnd,
+            _hicon       = nil,
+            _hiconOwned  = false,
+            _tip         = "mudscript",
+            _clickCb     = nil,
+            _menu        = nil,
+            _defaultMenu = defaultMenuItems,   -- used until :setMenu overrides
+            _deleted     = true,   -- flipped false by the NIM_ADD below when shown
         }, Menubar)
         nextId = nextId + 1
+
+        -- Give it a visible icon up front so the tray is never blank, even if the
+        -- caller never calls :setIcon or points it at a missing file. setIcon's own
+        -- fallback chain (bundled PNG -> stock icon) picks the image.
+        local hicon, owned = loadHIconOrDefault(nil)
+        if hicon then self._hicon, self._hiconOwned = hicon, owned end
 
         if inMenuBar == false then
             return self   -- detached; returnToMenuBar() will add it
