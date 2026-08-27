@@ -28,30 +28,19 @@ local usercontent = {}
     local Controller = {}
     Controller.__index = Controller
 
-    -- setCallback(fn): fn is invoked as fn(message) per posted message. CRITICAL: in
-    -- real Hammerspoon (WKScriptMessage_toLua) `message` is a TABLE, not the raw
-    -- string -- { body = <payload>, name = <channel>, frameInfo, webView } -- and
-    -- consumers read `message.body` (mudscript ms_shell.lua's shell callback does
-    -- exactly `tostring(message.body)` then json.decode). We MUST deliver that same
-    -- shape (see _deliver); delivering a bare string makes `message.body` nil, the
-    -- decode fail, and EVERY message (including the `ready` handshake) get dropped --
-    -- which strands the shell at the 1.5s force-open fallback. Returns self for
-    -- chaining. Passing nil clears it.
+    -- setCallback(fn): fn is invoked as fn(message) for each string the page posts.
+    -- Returns self for chaining, mirroring Hammerspoon. Passing nil clears it.
     function Controller:setCallback(fn)
         self._callback = fn
         return self
     end
 
-    -- _deliver(rawString): PRIVATE seam called by hs.webview from the
-    -- WebMessageReceived handler with the raw string the page posted. We wrap it into
-    -- the Hammerspoon WKScriptMessage table shape (body/name) so a mudscript callback
-    -- written to the real HS contract works unchanged on WebView2. Guarded so a
-    -- throwing consumer callback can never unwind across the FFI boundary in the
-    -- parent's Invoke (a throw there is a hard crash).
-    function Controller:_deliver(rawString)
+    -- _deliver(message): PRIVATE seam called by hs.webview from the WebMessageReceived
+    -- handler. Guarded so a throwing consumer callback can never unwind across the
+    -- FFI boundary in the parent's Invoke (a throw there is a hard crash).
+    function Controller:_deliver(message)
         local fn = self._callback
         if not fn then return end
-        local message = { body = rawString, name = self._name }
         local ok, err = pcall(fn, message)
         if not ok then
             io.stderr:write("hs.webview.usercontent callback error: " .. tostring(err) .. "\n")

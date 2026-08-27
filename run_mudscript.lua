@@ -264,8 +264,7 @@
     local ENABLE_WEBVIEW = os.getenv("MUDSPOON_WEBVIEW") == "1"
 
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
-        "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound", "focus",
-        "audiodevice" }
+        "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -275,11 +274,6 @@
     -- (there is no hs/eventtap.lua). init.lua already assembled the aggregate table
     -- as hs.eventtap (tap + .event); alias the bare require name to it via preload.
     package.preload["hs.eventtap"] = function() return hs.eventtap end
-
-    -- hs.window.filter is a real submodule (Win32 SetWinEventHook). mac/ both
-    -- require()s "hs.window.filter" and reaches it as hs.window.filter, so hang it on
-    -- the loaded hs.window table (require() resolves the file on its own via package.path).
-    if hs.window then hs.window.filter = require("hs.window.filter") end
 -- END --
 
 -- Route os.execute through the POSIX sh too (Windows) --
@@ -324,7 +318,9 @@
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
-        "uielement", "axuielement",
+        "window.filter",
+        "uielement", "axuielement", "focus",
+        "audiodevice", "processInfo",
         "chooser",
     }
 
@@ -369,23 +365,7 @@
     hs.accessibilityState = function() return true end   -- Win32 has no AX gate
     hs.openConsole        = function() end                 -- no console window yet
     hs.loadSpoon          = function() return nil end      -- plugins not wired yet
-    -- processInfo: mac/ reads .processID (ms_settings pid probe). Resolve a REAL pid
-    -- via ffi -- GetCurrentProcessId on Windows, getpid() on the POSIX host we test on.
-    local realPID = 0
-    do
-        local okp, pid = pcall(function()
-            local ffi = require("ffi")
-            if package.config:sub(1, 1) == "\\" then
-                ffi.cdef([[ unsigned long GetCurrentProcessId(void); ]])
-                return tonumber(ffi.load("kernel32").GetCurrentProcessId())
-            else
-                ffi.cdef([[ int getpid(void); ]])
-                return tonumber(ffi.C.getpid())
-            end
-        end)
-        if okp and pid then realPID = pid end
-    end
-    hs.processInfo        = { bundleID = "org.mudspoon", processID = realPID }
+    hs.processInfo        = { bundleID = "org.mudspoon", processID = 0 }
 -- END --
 
 -- Boot: run the entry file, then drive the runloop --

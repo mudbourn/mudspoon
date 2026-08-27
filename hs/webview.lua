@@ -605,22 +605,10 @@ webview.usercontent = usercontent
     end
 
     -- :bringToFront() -- raise above other top-most windows without stealing focus.
-    -- CRITICAL: on macOS a WKWebView paints as soon as its window is on screen, so
-    -- mudscript reveals the shell/popouts with bringToFront alone (ms_shell.lua never
-    -- calls :show()). On WebView2 the CONTROLLER has its own IsVisible flag, and our
-    -- bring-up forces it to 0 (put_IsVisible at ctrl-Invoke, _visible defaults false).
-    -- Nothing else turns it back on for the shell -- so raising the HWND showed a
-    -- LAYERED window whose controller painted nothing => fully transparent = invisible
-    -- (alerts, which are canvas not WebView2, stayed visible -- the tell). So raising
-    -- to front must ALSO make the controller visible, matching the macOS semantics.
     function Webview:bringToFront()
         if self._deleted then return self end
         U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                        bit.bor(SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW))
-        self._visible = true
-        whenReady(self, function()
-            self._controller.lpVtbl.put_IsVisible(self._controller, 1)
-        end)
         return self
     end
 
@@ -903,15 +891,6 @@ webview.usercontent = usercontent
         -- birth, so the physical/logical gap is never visible.
         U.SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA)
 
-        -- Order the window ON SCREEN immediately (at alpha 0 = fully transparent, so
-        -- nothing shows and there is no flash). This mirrors macOS, where an hs.webview
-        -- window is ordered-in at creation and alpha() is PURE OPACITY. Some consumers
-        -- reveal a view with alpha() ALONE and never call show()/bringToFront() (e.g.
-        -- the loading screen, ms_loading.lua). If the window stayed hidden (WS_POPUP w/o
-        -- WS_VISIBLE, no ShowWindow) those views would never appear no matter the alpha.
-        -- SW_SHOWNOACTIVATE keeps focus where it is.
-        U.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-
         local self = setmetatable({
             _hwnd           = hwnd,
             _rect           = r,
@@ -920,12 +899,7 @@ webview.usercontent = usercontent
             _queue          = {},                     -- deferred ops until core ready
             _controller     = nil,
             _core           = nil,
-            -- Controller visible by DEFAULT (WebView2's own default too): the window is
-            -- born transparent (alpha 0), so a visible controller paints nothing until
-            -- alpha() raises opacity -- making alpha() the single reveal control, as on
-            -- macOS. Forcing the controller invisible here is what left alpha-only
-            -- reveals (loading screen) permanently blank. hide() still flips it off.
-            _visible        = true,
+            _visible        = false,
             _deleted        = false,
             _alpha          = 1.0,
             _level          = 0,
