@@ -171,6 +171,17 @@ typedef struct MsgHandlerVtbl {
 } MsgHandlerVtbl;
 struct MsgHandler { MsgHandlerVtbl* lpVtbl; };
 
+/* NavigationCompleted handler: same shape as MsgHandler (IUnknown + a two-arg
+ * Invoke(sender, args)). Invoke's args is an ICoreWebView2NavigationCompletedEventArgs. */
+typedef struct NavHandler NavHandler;
+typedef struct NavHandlerVtbl {
+  HRESULT (__stdcall *QueryInterface)(void*, void*, void**);
+  ULONG   (__stdcall *AddRef)(void*);
+  ULONG   (__stdcall *Release)(void*);
+  HRESULT (__stdcall *Invoke)(void*, void* /*ICoreWebView2* */, void* /*args*/);
+} NavHandlerVtbl;
+struct NavHandler { NavHandlerVtbl* lpVtbl; };
+
 /* --- COM interfaces WE CALL --------------------------------------------------
  * Each vtable is IUnknown(3) then the interface's methods in EXACT IDL order.
  * Methods we never call are declared as void* placeholders (`pad*`) purely to
@@ -251,7 +262,7 @@ typedef struct ICoreWebView2Vtbl {
   void* pad_remove_SourceChanged;                                            /* 12 */
   void* pad_add_HistoryChanged;                                              /* 13 */
   void* pad_remove_HistoryChanged;                                           /* 14 */
-  void* pad_add_NavigationCompleted;                                         /* 15 */
+  HRESULT (__stdcall *add_NavigationCompleted)(ICoreWebView2*, NavHandler*, EventRegistrationToken*); /* 15 */
   void* pad_remove_NavigationCompleted;                                      /* 16 */
   void* pad_add_FrameNavigationStarting;                                     /* 17 */
   void* pad_remove_FrameNavigationStarting;                                  /* 18 */
@@ -285,6 +296,19 @@ typedef struct ICoreWebView2WebMessageReceivedEventArgsVtbl {
   HRESULT (__stdcall *TryGetWebMessageAsString)(ICoreWebView2WebMessageReceivedEventArgs*, LPWSTR*); /* 5 */
 } ICoreWebView2WebMessageReceivedEventArgsVtbl;
 struct ICoreWebView2WebMessageReceivedEventArgs { ICoreWebView2WebMessageReceivedEventArgsVtbl* lpVtbl; };
+
+/* ICoreWebView2NavigationCompletedEventArgs: get_IsSuccess(3), get_WebErrorStatus(4,
+ * COREWEBVIEW2_WEB_ERROR_STATUS is an int enum), get_NavigationId(5, UINT64). */
+typedef struct ICoreWebView2NavigationCompletedEventArgs ICoreWebView2NavigationCompletedEventArgs;
+typedef struct ICoreWebView2NavigationCompletedEventArgsVtbl {
+  HRESULT (__stdcall *QueryInterface)(ICoreWebView2NavigationCompletedEventArgs*, void*, void**);
+  ULONG   (__stdcall *AddRef)(ICoreWebView2NavigationCompletedEventArgs*);
+  ULONG   (__stdcall *Release)(ICoreWebView2NavigationCompletedEventArgs*);
+  HRESULT (__stdcall *get_IsSuccess)(ICoreWebView2NavigationCompletedEventArgs*, BOOL*);              /* 3 */
+  HRESULT (__stdcall *get_WebErrorStatus)(ICoreWebView2NavigationCompletedEventArgs*, int*);          /* 4 */
+  HRESULT (__stdcall *get_NavigationId)(ICoreWebView2NavigationCompletedEventArgs*, unsigned long long*); /* 5 */
+} ICoreWebView2NavigationCompletedEventArgsVtbl;
+struct ICoreWebView2NavigationCompletedEventArgs { ICoreWebView2NavigationCompletedEventArgsVtbl* lpVtbl; };
 
 /* --- The WebView2Loader export --- */
 HRESULT CreateCoreWebView2EnvironmentWithOptions(LPCWSTR, LPCWSTR, void*, EnvHandler*);
@@ -591,6 +615,20 @@ webview.usercontent = usercontent
         whenReady(self, function()
             self._core.lpVtbl.ExecuteScript(self._core, ffi.cast("LPCWSTR", w), nil)
         end)
+        return self
+    end
+
+    -- :navigationCallback(fn) -- register a page-navigation callback, Hammerspoon
+    -- shape: fn(action, webView, navID[, errorTable]). WebView2 exposes only a single
+    -- post-hoc NavigationCompleted event (no per-phase provisional/commit callbacks),
+    -- so we emit the two actions it can actually distinguish:
+    --   "didFinishNavigation"                on success
+    --   "didFailNavigation", <errorTable>    on failure ({code, description})
+    -- The NavigationCompleted handler is registered once during bring-up (see
+    -- startBringUp) and reads self._navCallback live, so calling this before OR after
+    -- the core is ready both work, and passing nil disables the callback. Returns self.
+    function Webview:navigationCallback(fn)
+        self._navCallback = fn
         return self
     end
 
