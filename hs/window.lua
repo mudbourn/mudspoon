@@ -375,4 +375,12 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
     window._isVisible    = function(hwnd) return U.IsWindowVisible(hwnd) ~= 0 end
 -- END --
 
+-- Attach the real hs.window.filter submodule so `hs.window.filter` resolves. Done
+-- HERE (not via the loader's stub table) now that hs/window/filter.lua exists. Safe
+-- against the load cycle: filter.lua requires hs.window only lazily (inside methods),
+-- so this require returns before filter touches the still-loading window module.
+    local okf, wfilter = pcall(require, "hs.window.filter")
+    if okf then window.filter = wfilter end
+-- END --
+
 return window

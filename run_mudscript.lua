@@ -330,7 +330,6 @@
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
-        "window.filter",
         "processInfo",
         "chooser",
     }
