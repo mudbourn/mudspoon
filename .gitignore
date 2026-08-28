@@ -8,3 +8,5 @@ docs/parity-audit-2026-08.md
 
 # smoke-suite generated reports
 smoke_report_*.json
+test/backup/.DS_Store
+test/backup/initのコピー.lua

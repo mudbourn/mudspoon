@@ -340,6 +340,31 @@ test("window", "frame-shape", "behavior", function()
     return true
 end)
 
+-- numfmt: label/key paths built from integer DIVISION results. The config runs
+-- on two number models -- LuaJIT (all doubles) on Windows, Lua 5.4 (distinct
+-- int/float) on Hammerspoon -- and under 5.4 `/` ALWAYS yields a float, so a
+-- naive tostring(1920/2) is "960" on one host and "960.0" on the other. These
+-- cases launder a division through the SAFE idiom -- string.format("%d",
+-- math.floor(n)) -- exactly as real labels and settings keys should. They must
+-- be byte-identical on both hosts; if a change ever lets the float model leak
+-- into a stringified number, diff_smoke's VALUE SKEW bucket surfaces it here
+-- instead of it going unnoticed in a live UI label. (The ui-lint numfmt-float
+-- tripwire guards the static side; this is the empirical, cross-host side.)
+test("numfmt", "dim-label", "behavior", function()
+    -- a menu/label built from a halved screen dimension
+    local w, h = 2560, 1440
+    local label = string.format("%dx%d", math.floor(w / 2), math.floor(h / 2))
+    need(label == "1280x720", "expected 1280x720, got " .. label)
+    return label
+end)
+
+test("numfmt", "settings-key", "behavior", function()
+    -- a settings key / id built from an integer division result
+    local key = ("grid.cell.%d"):format(math.floor(1920 / 8))
+    need(key == "grid.cell.240", "expected grid.cell.240, got " .. key)
+    return key
+end)
+
 -- audiodevice: default output device names itself.
 test("audiodevice", "default-output", "behavior", function()
     local d = hs.audiodevice.defaultOutputDevice()
