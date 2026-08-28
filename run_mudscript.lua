@@ -373,10 +373,48 @@
     -- lightweight host hooks stubbed until they earn a real implementation.
     hs.configdir = hsDir
 
-    -- reload: re-run the entry file in place. Good enough for the config-reload the
-    -- shell triggers; a fuller version would tear down state first.
+    -- reload: drop the config's cached modules, then re-run the entry file so edits
+    -- on disk actually take effect. init.lua only pulls its modules through require(),
+    -- and Lua caches those in package.loaded -- so without clearing the cache a reload
+    -- just re-requires the same in-memory copies and any file edit is ignored (the
+    -- symptom "hs.reload() does not reload mudscript"). We evict every config-side
+    -- module but PRESERVE the engine: the hs.* shims and the standard/FFI libraries.
+    -- Re-requiring an hs.* module would re-run its ffi.cdef and throw on the duplicate
+    -- typedef, and it holds live runtime state (timers, the runloop), so the engine
+    -- stays put while only the mudscript layer is rebuilt.
+    --
+    -- Caveat: this does not tear down state the OLD config created (hotkeys, timers,
+    -- menubars, watchers). mudscript is expected to reclaim those on load; a fuller
+    -- reset would require the engine to track and release them here.
     local ENTRY = hsDir .. "/init.lua"
+
+    -- Standard/JIT libraries that must never be evicted (name -> true).
+    local PROTECTED_LOADED = {
+        string = true, table = true, math = true, io = true, os = true,
+        coroutine = true, debug = true, package = true, ["package.preload"] = true,
+        ffi = true, jit = true, bit = true, utf8 = true, _G = true,
+    }
+
+    local function isProtected(name)
+        if PROTECTED_LOADED[name] then return true end
+        -- Engine shims: "hs" and anything under "hs." (hs.timer, hs.window, ...).
+        if name == "hs" or name:sub(1, 3) == "hs." then return true end
+        -- JIT sublibraries (jit.util, jit.opt, ...).
+        if name:sub(1, 4) == "jit." then return true end
+        return false
+    end
+
     function hs.reload()
+        -- Evict config modules so require() re-reads them from disk on re-run.
+        local evicted = {}
+        for name in pairs(package.loaded) do
+            if not isProtected(name) then evicted[#evicted + 1] = name end
+        end
+        for _, name in ipairs(evicted) do package.loaded[name] = nil end
+        io.stdout:write("[run_mudscript] hs.reload: evicted "
+            .. #evicted .. " config module(s); re-running init.lua\n")
+        io.stdout:flush()
+
         local chunk, err = loadfile(ENTRY)
         if not chunk then io.stderr:write("hs.reload: " .. tostring(err) .. "\n"); return end
         local ok, rerr = pcall(chunk)
