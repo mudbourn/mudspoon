@@ -411,6 +411,34 @@ testAsync("pathwatcher", "fires-on-change", function(done)
     end)
 end, 3.0)
 
+-- distributednotifications: an observer receives a post it matches, with userInfo
+-- intact. Intra-process here (one Lua state), which still exercises the full real
+-- transport -- the Win32 WM_COPYDATA loopback on mudspoon, NSDistributedNotification-
+-- Center's local delivery on Hammerspoon.
+testAsync("distributednotifications", "roundtrip", function(done)
+    local dn = hs.distributednotifications
+    if type(dn) ~= "table" or type(dn.new) ~= "function" or type(dn.post) ~= "function" then
+        return done("skip", "hs.distributednotifications unavailable")
+    end
+    local noteName = "mudspoon.smoke." .. tostring(os.time()) .. "." .. tostring(math.random(1e6))
+    local got = false
+    local watcher
+    watcher = dn.new(function(name, _object, userInfo)
+        if got or name ~= noteName then return end
+        got = true
+        if watcher then watcher:stop() end
+        local ok = type(userInfo) == "table" and userInfo.k == "v"
+        done(ok and "pass" or "fail",
+            ok and nil or "userInfo not round-tripped", "delivered")
+    end, noteName)
+    if not watcher then return done("skip", "distributednotifications.new returned nil") end
+    watcher:start()
+    -- give the observer a beat to arm its window, then post to it.
+    hs.timer.doAfter(0.2, function()
+        dn.post(noteName, "hs.smoke", { k = "v" })
+    end)
+end, 3.0)
+
 -- http (network-gated): a known raw URL returns HTTP 200 via async curl/NSURL.
 testAsync("http", "asyncGet-200", function(done)
     if not WANT_NET then return done("skip", "network tests off (set MUDSPOON_SMOKE_NET=1)") end

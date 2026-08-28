@@ -287,7 +287,8 @@
 
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
-        "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus" }
+        "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus",
+        "distributednotifications" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
