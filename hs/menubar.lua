@@ -467,7 +467,7 @@ local menubar = {}
                 elseif _G.hs and hs.reload then hs.reload() end
             end },
             { title = "-" },
-            { title = "Quit mudscript", fn = function()
+            { title = "Quit Hammerspoon", fn = function()
                 local ms = _G.ms
                 if ms and ms.shutdown then ms.shutdown()
                 elseif _G.hs and hs.shutdown then hs.shutdown()
@@ -483,7 +483,7 @@ local menubar = {}
             _hwnd        = hwnd,
             _hicon       = nil,
             _hiconOwned  = false,
-            _tip         = "mudscript",
+            _tip         = "Hammerspoon",
             _clickCb     = nil,
             _menu        = nil,
             _defaultMenu = defaultMenuItems,   -- used until :setMenu overrides
