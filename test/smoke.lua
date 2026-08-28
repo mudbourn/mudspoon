@@ -136,8 +136,7 @@ end
 local function approx(a, b, eps) return math.abs(a - b) <= (eps or 0.5) end
 
 local function tmpBase()
-    local base = os.getenv("MUDSPOON_SMOKE_OUT") and "" or ""  -- (unused; kept for clarity)
-    base = os.getenv("TMPDIR") or os.getenv("TMP") or os.getenv("TEMP") or "/tmp"
+    local base = os.getenv("TMPDIR") or os.getenv("TMP") or os.getenv("TEMP") or "/tmp"
     return (base:gsub("[/\\]+$", ""))
 end
 
