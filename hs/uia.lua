@@ -341,7 +341,7 @@ local uia = { available = false }
                 if self._fn then
                     local okc, err = pcall(self._fn, cur, eventName, self, self._userdata)
                     if not okc then
-                        io.stderr:write("mudspoon uielement watcher error: " .. tostring(err) .. "\n")
+                        io.stderr:write("hammerspoon uielement watcher error: " .. tostring(err) .. "\n")
                     end
                 end
             end

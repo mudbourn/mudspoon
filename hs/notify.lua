@@ -61,7 +61,7 @@ HICON LoadIconA(HINSTANCE, LPCSTR);
     local TRAY_UID     = 0x4D53       -- 'MS'; single shared notify slot
     local LINGER_S     = 12
 
-    local CLASS = "MudspoonNotify"
+    local CLASS = "HammerspoonNotify"
 -- END --
 
 -- Shared hidden message window + one default icon (lazy) --

@@ -94,7 +94,7 @@
 -- Persistent logging: tee every diagnostic write to a logfile --
     -- Until now output went ONLY to the console (io.stderr), so a boot-time panic
     -- or a window that closes takes its own error message with it. Tee stdout+stderr
-    -- into <hsDir>/mudspoon.log (appended each write, flushed immediately) so there
+    -- into <hsDir>/hammerspoon.log (appended each write, flushed immediately) so there
     -- is always a durable record to read after the fact. The console still echoes.
     --
     -- A true LuaJIT `PANIC:` or a Win32 access violation aborts BELOW the Lua io
@@ -105,10 +105,10 @@
     -- LuaJIT's panic->abort. Both write a marker into the same logfile, so a hard
     -- crash still leaves a durable "it died HERE, with THIS code" line.
     do
-        local logPath = hsDir .. "/mudspoon.log"
+        local logPath = hsDir .. "/hammerspoon.log"
         local lf = io.open(logPath, "a")
         if lf then
-            lf:write("\n===== mudspoon boot " .. os.date("%Y-%m-%d %H:%M:%S") .. " =====\n")
+            lf:write("\n===== hammerspoon boot " .. os.date("%Y-%m-%d %H:%M:%S") .. " =====\n")
             lf:flush()
             -- File handles are userdata (no field assignment), so replace io.stdout/
             -- io.stderr with proxy TABLES that tee :write into the log then forward to
@@ -164,7 +164,7 @@
                             if info ~= nil and info.ExceptionRecord ~= nil then
                                 code = tonumber(info.ExceptionRecord.ExceptionCode) or 0
                             end
-                            lf:write(("\n*** mudspoon: UNHANDLED WIN32 EXCEPTION 0x%08X"
+                            lf:write(("\n*** hammerspoon: UNHANDLED WIN32 EXCEPTION 0x%08X"
                                 .. " -- process aborting ***\n"):format(code))
                             if code == 0xC0000005 then
                                 lf:write("    (0xC0000005 = access violation -- typically a bad "
@@ -179,7 +179,7 @@
                     -- SIGABRT (LuaJIT panic -> abort, CRT assert). SIGABRT == 22 on Win.
                     local abrt = ffi.cast("SIGH", function()
                         pcall(function()
-                            lf:write("\n*** mudspoon: SIGABRT -- LuaJIT panic or abort() ***\n")
+                            lf:write("\n*** hammerspoon: SIGABRT -- LuaJIT panic or abort() ***\n")
                             lf:flush()
                         end)
                     end)
@@ -270,7 +270,7 @@
     -- WEBVIEW is OPT-IN: set MUDSPOON_WEBVIEW=1 to attempt the real WebView2 COM
     -- bring-up (instrumented -- see hs/webview.lua's trace()). Left off, webview stays
     -- a black-hole stub (below) so a COM fault can't take down a boot. The module has
-    -- never run on hardware; when enabled, the trace lines in mudspoon.log pinpoint the
+    -- never run on hardware; when enabled, the trace lines in hammerspoon.log pinpoint the
     -- last COM step reached before any crash (paired with the SEH exception-code line).
     local ENABLE_WEBVIEW = os.getenv("MUDSPOON_WEBVIEW") == "1"
 
@@ -383,7 +383,7 @@
         ffi.cdef("unsigned long GetCurrentProcessId(void);")
         realPID = tonumber(ffi.load("kernel32").GetCurrentProcessId())
     end)
-    hs.processInfo        = { bundleID = "org.mudspoon", processID = realPID }
+    hs.processInfo        = { bundleID = "org.hammerspoon.Hammerspoon", processID = realPID }
 -- END --
 
 -- Boot: run the entry file, then drive the runloop --

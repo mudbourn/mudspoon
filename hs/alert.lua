@@ -101,7 +101,7 @@ local alert = {}
 
     local function newId()
         nextId = nextId + 1
-        return "mudspoon-alert-" .. nextId
+        return "hammerspoon-alert-" .. nextId
     end
 
     -- Where the top of the next alert of height `h` should sit on `scr`.

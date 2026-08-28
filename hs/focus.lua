@@ -5,8 +5,8 @@
     --
     -- mudscript calls `hs.focus()` (no args) ~11 times across its core modules
     -- (guardian, settings, shell, ui), always meaning "bring my panel's host forward".
-    -- The panels are hs.webview windows (class "MudspoonWebView"); hs.canvas
-    -- ("MudspoonCanvas") and hs.alert ("MudspoonAlert") are transient overlays we do
+    -- The panels are hs.webview windows (class "HammerspoonWebView"); hs.canvas
+    -- ("HammerspoonCanvas") and hs.alert ("HammerspoonAlert") are transient overlays we do
     -- NOT want to prefer. So we enumerate our own top-level windows in Z-order and pick,
     -- in order of preference: a visible WebView, else a Canvas, else any visible
     -- top-level window of ours -- then SetForegroundWindow + BringWindowToTop it.
@@ -37,7 +37,7 @@ BOOL  BringWindowToTop(HWND);
 ]]
 
 -- Rank a class name: higher wins. 0 = not one of ours.
-local RANK = { MudspoonWebView = 3, MudspoonCanvas = 2, MudspoonAlert = 1 }
+local RANK = { HammerspoonWebView = 3, HammerspoonCanvas = 2, HammerspoonAlert = 1 }
 
 local ownPID  = K.GetCurrentProcessId()
 local pidBuf  = ffi.new("DWORD[1]")

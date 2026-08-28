@@ -37,7 +37,7 @@ local KEY_TYPES = { keyDown = true, keyUp = true, flagsChanged = true }
 
             local ok, del, posts = pcall(self._fn, ev)
             if not ok then
-                io.stderr:write("mudspoon eventtap callback error: " .. tostring(del) .. "\n")
+                io.stderr:write("hammerspoon eventtap callback error: " .. tostring(del) .. "\n")
                 return false
             end
 

@@ -86,7 +86,7 @@ DWORD   SetTextColor(HDC, DWORD);
     local DEFAULT_BG    = 0x001C1F24     -- deepslate; COLORREF is 0x00BBGGRR
     local DEFAULT_FG    = 0x00E8E8E8
 
-    local CLASS         = "MudspoonAlert"
+    local CLASS         = "HammerspoonAlert"
 -- END --
 
 -- Per-window records, keyed by HWND-as-integer --

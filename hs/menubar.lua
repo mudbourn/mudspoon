@@ -134,7 +134,7 @@ HICON LoadIconA(HINSTANCE, LPCSTR);
 
     local HWND_MESSAGE = ffi.cast("HWND", ffi.cast("intptr_t", -3))
 
-    local CLASS = "MudspoonMenubar"
+    local CLASS = "HammerspoonMenubar"
 -- END --
 
 -- Shared hidden message window (one per process; there is only ever one menubar) --

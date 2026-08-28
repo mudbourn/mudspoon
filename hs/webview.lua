@@ -71,7 +71,7 @@ local bit = require("bit")
 
 -- Bring-up trace (first-light diagnostics; defined early -- ensureLibs uses it) --
     -- WebView2 has never actually run under this host. Each COM boundary in the async
-    -- bring-up logs a line (tees to mudspoon.log), so if the rig crashes, the LAST
+    -- bring-up logs a line (tees to hammerspoon.log), so if the rig crashes, the LAST
     -- line names the exact step that faulted -- pair it with the SEH exception-code
     -- capture in run_mudscript.lua. Bring-up is solid now, so this is OFF by default;
     -- set MUDSPOON_WEBVIEW_TRACE=1 to re-enable the per-COM-boundary log.
@@ -381,7 +381,7 @@ BOOL    BringWindowToTop(HWND);
     local S_OK              = 0
     local E_NOINTERFACE     = ffi.cast("long", 0x80004002)
 
-    local CLASS             = "MudspoonWebView"
+    local CLASS             = "HammerspoonWebView"
 -- END --
 
 -- windowMasks (public constants; bit-flag integers) --
@@ -575,20 +575,58 @@ webview.usercontent = usercontent
         "})();</script>",
     })
 
-    -- Insert the bridge shim so it runs before the page's own scripts: right after the
-    -- opening <head> if present, else prepended to the document.
-    local function injectBridge(str)
-        if type(str) ~= "string" then return str end
-        if str:find("<head", 1, true) then
-            return (str:gsub("(<head[^>]*>)", function(h) return h .. BRIDGE_SHIM end, 1))
-        end
-        return BRIDGE_SHIM .. str
+    -- Normalise a baseURL argument to a document base URL for <base href>. Hammerspoon's
+    -- :html(html, baseURL) sets the WKWebView base URL so a page's relative asset refs
+    -- (e.g. url("./fonts/x.ttf")) resolve against it. WebView2's NavigateToString has NO
+    -- base-URL parameter -- the reason the 2nd arg was silently dropped -- so we replicate
+    -- the semantics by injecting <base href> (below). baseURL may arrive as a real URL
+    -- (file://..., https://...), used verbatim, or a bare Windows path (C:\...\ui\), which
+    -- a browser base href cannot use, so it is converted to a file:/// URL.
+    --
+    -- RISK (rig-verify): a <base href> makes relative refs RESOLVE, but WebView2/Chromium
+    -- only permits file:// SUBRESOURCE loads from a document whose own origin is file://.
+    -- NavigateToString gives the document an opaque origin, so a file:// base may still
+    -- have its ./asset fetches BLOCKED by the security model -- exactly why the sibling
+    -- AHK app Navigate()s to a file:// URL for its UIs instead of stringifying. This works
+    -- as-is for http(s)/virtual-host baseURLs; if file:// assets do not load on the rig,
+    -- the fix is ICoreWebView2_3::SetVirtualHostNameToFolderMapping (map the folder to a
+    -- virtual https host, then set <base href> to that host) -- a new COM slot, not wired.
+    local function toBaseURL(baseURL)
+        if type(baseURL) ~= "string" or baseURL == "" then return nil end
+        if baseURL:find("^%a[%w+.-]*://") then return baseURL end  -- already scheme://...
+        local p = baseURL:gsub("\\", "/")                          -- path -> forward slashes
+        if p:find("^/") then return "file://" .. p end             -- already rooted / UNC
+        return "file:///" .. p                                     -- drive path: C:/...
     end
 
-    -- :html(str) -- load an HTML string (NavigateToString). Deferred until ready.
-    function Webview:html(str)
+    -- The <base href> tag for a baseURL, or "" when none. Escapes the two attribute-
+    -- breaking chars; the value is otherwise emitted verbatim.
+    local function baseTag(baseURL)
+        local u = toBaseURL(baseURL)
+        if not u then return "" end
+        u = u:gsub("&", "&amp;"):gsub('"', "&quot;")
+        return '<base href="' .. u .. '">'
+    end
+
+    -- Insert our head content (a <base> for relative-asset resolution, then the bridge
+    -- shim) so it runs before the page's own scripts and refs: right after the opening
+    -- <head> if present, else prepended. <base> goes first so it governs every later
+    -- relative URL in the document.
+    local function injectHead(str, baseURL)
+        if type(str) ~= "string" then return str end
+        local inject = baseTag(baseURL) .. BRIDGE_SHIM
+        if str:find("<head", 1, true) then
+            return (str:gsub("(<head[^>]*>)", function(h) return h .. inject end, 1))
+        end
+        return inject .. str
+    end
+
+    -- :html(str [, baseURL]) -- load an HTML string (NavigateToString). baseURL, when
+    -- given, sets the document base so relative asset refs resolve (see toBaseURL).
+    -- Deferred until ready.
+    function Webview:html(str, baseURL)
         if NO_HTML then trace(":html() suppressed (MUDSPOON_WEBVIEW_NOHTML)"); return self end
-        local w = toWide(injectBridge(str))
+        local w = toWide(injectHead(str, baseURL))
         whenReady(self, function()
             self._html_keep = w  -- hold the wide buffer across the (sync-copying) call
             trace(":html flush -> NavigateToString")

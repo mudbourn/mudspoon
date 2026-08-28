@@ -185,7 +185,7 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
     local DEFAULT_BG_ARGB   = 0xFF1C1F24   -- deepslate, opaque
     local DEFAULT_FG_ARGB   = 0xFFE8E8E8
 
-    local CLASS             = "MudspoonCanvas"
+    local CLASS             = "HammerspoonCanvas"
 -- END --
 
 -- Colour helpers: Hammerspoon {red,green,blue,alpha} 0..1 -> GDI+ ARGB 0xAARRGGBB --

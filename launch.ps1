@@ -34,8 +34,8 @@ $ErrorActionPreference = "Stop"
 # END #
 
 # Small helpers #
-    function Info($m) { Write-Host "[mudspoon] $m" }
-    function Warn($m) { Write-Host "[mudspoon] $m" -ForegroundColor Yellow }
+    function Info($m) { Write-Host "[hammerspoon] $m" }
+    function Warn($m) { Write-Host "[hammerspoon] $m" -ForegroundColor Yellow }
     function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 
     function Winget-Install($id) {
@@ -176,7 +176,7 @@ $ErrorActionPreference = "Stop"
     if ($Foreground) {
         # Attached: boot log streams to this console, Ctrl+C stops the host. Good for
         # first-light debugging (pair with $env:MUDSPOON_WEBVIEW_TRACE = "1").
-        Info "starting mudspoon in the foreground (Ctrl+C to stop) ..."
+        Info "starting hammerspoon in the foreground (Ctrl+C to stop) ..."
         Push-Location $Root
         try { & $luajit $entry } finally { Pop-Location }
         exit $LASTEXITCODE
@@ -184,11 +184,11 @@ $ErrorActionPreference = "Stop"
         # Detached + hidden: the host keeps running after this launcher exits, with no
         # console window -- the closest Windows gets to the always-resident .app. The
         # low-level keyboard/mouse hooks pump on the host's own runloop, so no visible
-        # window is needed. Diagnostics still tee to ..\.hammerspoon\mudspoon.log.
+        # window is needed. Diagnostics still tee to ..\.hammerspoon\hammerspoon.log.
         Start-Process -FilePath $luajit -ArgumentList $entry `
                       -WorkingDirectory $Root -WindowStyle Hidden
-        Info "mudspoon is running (windowless). Quit from its menubar, or run Stop-Mudspoon.cmd."
+        Info "hammerspoon is running (windowless). Quit from its menubar, or run Stop-Mudspoon.cmd."
         $logDir = (Resolve-Path (Join-Path $Root "..")).Path
-        Info "boot log: $logDir\.hammerspoon\mudspoon.log"
+        Info "boot log: $logDir\.hammerspoon\hammerspoon.log"
     }
 # END #

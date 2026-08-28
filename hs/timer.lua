@@ -40,7 +40,7 @@ local timer = {}
     -- Fire the callback now, out of band. Does not disturb the schedule.
     function Timer:fire()
         local ok, err = pcall(self._fn)
-        if not ok then io.stderr:write("mudspoon timer:fire error: " .. tostring(err) .. "\n") end
+        if not ok then io.stderr:write("hammerspoon timer:fire error: " .. tostring(err) .. "\n") end
         return self
     end
 

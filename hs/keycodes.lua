@@ -168,7 +168,7 @@ local keycodes = {}
     end
 
     function keycodes.currentSourceID()
-        return "com.mudspoon.keylayout.US"
+        return "com.apple.keylayout.US"
     end
 
     -- Hammerspoon's hs.keycodes.map is also callable-ish in some code via these

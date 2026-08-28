@@ -168,8 +168,8 @@ local task = {}
         end
 
         local stamp = tostring(os.time()) .. "_" .. tostring(math.random(1, 1e9))
-        self._outPath = tempDir() .. "/mudspoon_task_" .. stamp .. ".out"
-        self._errPath = tempDir() .. "/mudspoon_task_" .. stamp .. ".err"
+        self._outPath = tempDir() .. "/hammerspoon_task_" .. stamp .. ".out"
+        self._errPath = tempDir() .. "/hammerspoon_task_" .. stamp .. ".err"
         self._outPos  = 0
 
         -- Inheritable temp-file handles for the child's stdout/stderr.

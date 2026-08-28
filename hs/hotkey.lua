@@ -67,7 +67,7 @@ local hotkey = {}
     local function safe(fn)
         if not fn then return end
         local ok, err = pcall(fn)
-        if not ok then io.stderr:write("mudspoon hotkey callback error: " .. tostring(err) .. "\n") end
+        if not ok then io.stderr:write("hammerspoon hotkey callback error: " .. tostring(err) .. "\n") end
     end
 
     local function onEvent(ev)

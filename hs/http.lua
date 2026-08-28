@@ -24,7 +24,7 @@ local task = require("hs.task")
     end
 
     local function tmpBodyPath()
-        return tempDir() .. "/mudspoon_http_"
+        return tempDir() .. "/hammerspoon_http_"
             .. tostring(os.time()) .. "_" .. tostring(math.random(1, 1e9)) .. ".body"
     end
 -- END --

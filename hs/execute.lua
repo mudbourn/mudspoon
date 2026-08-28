@@ -43,7 +43,7 @@
     -- status on its own final line, then strip that line back off the returned
     -- output. Because every shelled command now runs under a POSIX sh (directly on
     -- mac, via `sh <file>` on Windows), the POSIX `$?` form is all we need.
-    local MARKER = "__mudspoon_rc__"
+    local MARKER = "__hammerspoon_rc__"
 -- END --
 
 -- One-time sh availability probe (Windows) --
@@ -77,7 +77,7 @@
     local function runViaSh(command)
         if not shAvailable() then return nil, "no sh" end
 
-        local path = ("%s/mudspoon_exec_%d_%d.sh")
+        local path = ("%s/hammerspoon_exec_%d_%d.sh")
             :format(tempDir():gsub("[/\\]+$", ""), os.time(), math.random(1, 1e9))
 
         local f, ferr = io.open(path, "wb")

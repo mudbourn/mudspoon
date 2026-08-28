@@ -5,7 +5,10 @@ implements the `hs.*` API surface so tools written against Hammerspoon run
 unmodified on Windows, with mudscript as the first consumer. Closer in spirit to
 Proton or FEX than to a per-app port.
 
-Codename `mudspoon` is provisional and only appears in the alert window class today.
+`mudspoon` is only the repo/project codename. At runtime the host presents itself
+as Hammerspoon — process identity (`hs.processInfo.bundleID`), window classes
+(`HammerspoonWebView`, `HammerspoonCanvas`, `HammerspoonAlert`, ...), the boot log
+(`hammerspoon.log`), and log tags — so tools that probe for Hammerspoon see it.
 
 ## Status: spike stage
 

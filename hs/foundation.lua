@@ -307,7 +307,7 @@ local host = {
                     timers[h] = nil
                 end
                 local ok, err = pcall(h.fn)
-                if not ok then io.stderr:write("mudspoon timer error: " .. tostring(err) .. "\n") end
+                if not ok then io.stderr:write("hammerspoon timer error: " .. tostring(err) .. "\n") end
             end
         end
     end
@@ -371,7 +371,7 @@ local host = {
         for _, fn in ipairs(subs) do
             local ok, res = pcall(fn, ev)
             if not ok then
-                io.stderr:write("mudspoon event handler error: " .. tostring(res) .. "\n")
+                io.stderr:write("hammerspoon event handler error: " .. tostring(res) .. "\n")
             elseif res == true then
                 swallow = true
             end
@@ -432,7 +432,7 @@ local host = {
         jit.off(keyBody, true)
         keyProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
             local ok, swallow = pcall(keyBody, nCode, wParam, lParam)
-            if not ok then io.stderr:write("mudspoon key hook error: " .. tostring(swallow) .. "\n") end
+            if not ok then io.stderr:write("hammerspoon key hook error: " .. tostring(swallow) .. "\n") end
             if ok and swallow then return 1 end
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
@@ -486,7 +486,7 @@ local host = {
         jit.off(mouseBody, true)
         mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
             local ok, swallow = pcall(mouseBody, nCode, wParam, lParam)
-            if not ok then io.stderr:write("mudspoon mouse hook error: " .. tostring(swallow) .. "\n") end
+            if not ok then io.stderr:write("hammerspoon mouse hook error: " .. tostring(swallow) .. "\n") end
             if ok and swallow then return 1 end
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
@@ -550,14 +550,14 @@ local host = {
                 for _, fn in ipairs(winSubs) do
                     local ok, err = pcall(fn, event, hwnd, idObject, idChild)
                     if not ok then
-                        io.stderr:write("mudspoon winevent handler error: " .. tostring(err) .. "\n")
+                        io.stderr:write("hammerspoon winevent handler error: " .. tostring(err) .. "\n")
                     end
                 end
             end
             jit.off(winBody, true)
             winProc = ffi.cast("WINEVENTPROC", function(hook, event, hwnd, idObj, idChild, thread, time)
                 local ok, err = pcall(winBody, hook, event, hwnd, idObj, idChild)
-                if not ok then io.stderr:write("mudspoon winevent hook error: " .. tostring(err) .. "\n") end
+                if not ok then io.stderr:write("hammerspoon winevent hook error: " .. tostring(err) .. "\n") end
             end)
         end
         if #winHooks == 0 then
