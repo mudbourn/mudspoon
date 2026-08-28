@@ -435,6 +435,32 @@
     hs.processInfo        = { bundleID = "org.hammerspoon.Hammerspoon", processID = realPID }
 -- END --
 
+-- Smoke-test hook: run the cross-platform hs.* suite instead of booting mudscript --
+    -- Set MUDSPOON_SMOKE=<abs path to test/smoke.lua> to run the parity/functionality
+    -- suite against the SAME assembled `hs` mudscript sees (all realExtra modules + host
+    -- fields wired above), then exit -- WITHOUT loading mudscript's init.lua/UI. The suite
+    -- drives its own runloop for async tests and os.exit()s with 0 (all pass) or 1 (any
+    -- failure); a load/raise here exits 2. See test/README.md.
+    do
+        local smoke = os.getenv("MUDSPOON_SMOKE")
+        if smoke and smoke ~= "" then
+            io.stdout:write("[run_mudscript] MUDSPOON_SMOKE set -- running smoke suite: " .. smoke .. "\n")
+            io.stdout:flush()
+            local schunk, serr = loadfile(smoke)
+            if not schunk then
+                io.stderr:write("[run_mudscript] cannot load smoke suite " .. smoke .. ": " .. tostring(serr) .. "\n")
+                os.exit(2)
+            end
+            local sok, scode = pcall(schunk)
+            if not sok then
+                io.stderr:write("[run_mudscript] smoke suite raised: " .. tostring(scode) .. "\n")
+                os.exit(2)
+            end
+            os.exit(tonumber(scode) or 0)
+        end
+    end
+-- END --
+
 -- Boot: run the entry file, then drive the runloop --
     io.stdout:write("[run_mudscript] booting mudscript from " .. hsDir .. "\n")
 
