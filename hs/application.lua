@@ -257,12 +257,16 @@ BOOL   SetForegroundWindow(HWND);
     --                             the app owning the new front window is activated, the
     --                             previous one deactivated.
     --   launched / terminated   : first top-level window a pid opens => launched; the
-    --                             last one it closes => terminated. Seeded at start()
-    --                             from currently-open windows so already-running apps
-    --                             don't spuriously report launched/terminated.
-    --   hidden / unhidden       : a top-level window HIDE / SHOW (Windows has no true
-    --                             app-hide; this is the closest signal).
-    -- `launching` has no Win32 analog (no pre-launch signal) and never fires.
+    --                             last one it closes (or the process exiting) =>
+    --                             terminated. Seeded at start() from currently-open
+    --                             windows so already-running apps don't spuriously
+    --                             report launched/terminated.
+    -- `launching`, `hidden`, `unhidden` have no faithful Win32 analog and never fire:
+    -- there is no pre-launch signal, and Windows has no application-level hide (a
+    -- top-level window SHOW/HIDE is per-window paint churn -- one app launch emits a
+    -- dozen of them -- so mapping those to app hidden/unhidden is noise, not signal).
+    -- The constants stay for API compatibility; only launched/terminated/activated/
+    -- deactivated actually fire.
     local pidBufW = ffi.new("DWORD[1]")
     local function pidOfHwnd(hwnd)
         if hwnd == nil then return nil end
@@ -271,27 +275,61 @@ BOOL   SetForegroundWindow(HWND);
         local p = tonumber(pidBufW[0])
         return (p ~= 0) and p or nil
     end
-    local function hwndId(hwnd) return tonumber(ffi.cast("intptr_t", hwnd)) end
 
     local watcherProto = {}
     watcherProto.__index = watcherProto
 
     function watcherProto:start()
         if self._unsub then return self end
-        self._front   = nil   -- pid of the last-activated app
-        self._hwndPid = {}     -- hwndId -> pid (for launch/terminate bookkeeping)
-        self._appPids = {}     -- pid -> count of its live top-level windows we've seen
+        self._front = nil   -- pid of the last-activated app
+        self._known = {}     -- pid -> true for every app we currently know owns a window
+        self._names = {}     -- pid -> last-known name, so terminated can name a dead pid
+        self._lastSweep = 0  -- host.now() of the last isRunning sweep (throttle)
         local W = host.winEvents
 
-        -- Seed from the current desktop so pre-existing apps aren't seen as launching.
+        -- Register a pid as a known windowed app, caching its name while the process is
+        -- alive (once it exits the name is unrecoverable from the pid alone). Only apps
+        -- we can actually name are tracked -- an unnameable window is a system/host
+        -- surface whose termination is noise to consumers. Returns the name, or nil if
+        -- it could not be named (and was therefore not registered).
+        local function noteApp(pid)
+            if not pid then return nil end
+            if self._known[pid] then return self._names[pid] end
+            local n = newApp(pid):name()
+            if not n then return nil end
+            self._known[pid] = true
+            self._names[pid] = n
+            return n
+        end
+
+        -- Terminated is detected by PROCESS DEATH, not by matching window handles:
+        -- packaged/multi-window apps tear down many top-level windows whose HWNDs never
+        -- line up with the one that fired "launched", and a force-kill sends no clean
+        -- destroys at all. So on any (throttled) event we sweep the known-app set and
+        -- report any pid whose process has actually exited. A foreground change always
+        -- accompanies an app closing, so this catches force-kills even on a quiet desktop.
+        local function sweepDead(fn)
+            local now = host.now()
+            if now - self._lastSweep < 200 then return end
+            self._lastSweep = now
+            for pid in pairs(self._known) do
+                if not newApp(pid):isRunning() then
+                    local name = self._names[pid]
+                    self._known[pid] = nil
+                    self._names[pid] = nil
+                    if pid == self._front then self._front = nil end
+                    -- appObject wraps a dead pid: name() would fail, so pass the cache.
+                    fn(name, application.watcher.terminated, newApp(pid))
+                end
+            end
+        end
+
+        -- Seed from the current desktop so pre-existing apps aren't seen as launching,
+        -- but ARE eligible for terminated if they later exit.
         local okwin, win = pcall(require, "hs.window")
         if okwin and type(win) == "table" and type(win._enumTopLevel) == "function" then
             for _, hwnd in ipairs(win._enumTopLevel()) do
-                local pid = pidOfHwnd(hwnd)
-                if pid then
-                    self._hwndPid[hwndId(hwnd)] = pid
-                    self._appPids[pid] = (self._appPids[pid] or 0) + 1
-                end
+                noteApp(pidOfHwnd(hwnd))
             end
         end
         self._front = pidOfHwnd(U.GetForegroundWindow())
@@ -299,6 +337,7 @@ BOOL   SetForegroundWindow(HWND);
         self._unsub = host.onWinEvent(function(event, hwnd, idObject, idChild)
             local fn = self._fn
             if not fn then return end
+            sweepDead(fn)  -- throttled process-death detection on any activity
 
             if event == W.foreground then
                 local pid = pidOfHwnd(hwnd)
@@ -308,52 +347,23 @@ BOOL   SetForegroundWindow(HWND);
                     fn(old:name(), application.watcher.deactivated, old)
                 end
                 self._front = pid
+                noteApp(pid)
                 local app = newApp(pid)
                 fn(app:name(), application.watcher.activated, app)
                 return
             end
 
-            -- Everything below is window-object scoped: top-level windows only.
+            -- Top-level window objects only (child controls / caret / cursor excluded).
             if idObject ~= W.OBJID_WINDOW or idChild ~= W.CHILDID_SELF then return end
 
+            -- A new top-level window from a pid we haven't named yet is a launch.
+            -- (objectDestroy needs no branch: sweepDead above turns real process
+            -- exits into terminated, whatever window handles were involved.)
             if event == W.objectCreate then
                 local pid = pidOfHwnd(hwnd)
-                if not pid then return end
-                self._hwndPid[hwndId(hwnd)] = pid
-                local n = self._appPids[pid] or 0
-                self._appPids[pid] = n + 1
-                if n == 0 then
-                    local app = newApp(pid)
-                    fn(app:name(), application.watcher.launched, app)
-                end
-
-            elseif event == W.objectDestroy then
-                -- After destroy the HWND is dead, so resolve pid from our map, not the OS.
-                local id  = hwndId(hwnd)
-                local pid = self._hwndPid[id]
-                if not pid then return end
-                self._hwndPid[id] = nil
-                local n = (self._appPids[pid] or 1) - 1
-                if n <= 0 then
-                    self._appPids[pid] = nil
-                    local app = newApp(pid)
-                    fn(app:name(), application.watcher.terminated, app)
-                else
-                    self._appPids[pid] = n
-                end
-
-            elseif event == W.objectShow then
-                local pid = pidOfHwnd(hwnd)
-                if pid then
-                    local app = newApp(pid)
-                    fn(app:name(), application.watcher.unhidden, app)
-                end
-
-            elseif event == W.objectHide then
-                local pid = self._hwndPid[hwndId(hwnd)] or pidOfHwnd(hwnd)
-                if pid then
-                    local app = newApp(pid)
-                    fn(app:name(), application.watcher.hidden, app)
+                if pid and not self._known[pid] then
+                    local n = noteApp(pid)
+                    if n then fn(n, application.watcher.launched, newApp(pid)) end
                 end
             end
         end)
@@ -362,8 +372,8 @@ BOOL   SetForegroundWindow(HWND);
 
     function watcherProto:stop()
         if self._unsub then self._unsub(); self._unsub = nil end
-        self._hwndPid = nil
-        self._appPids = nil
+        self._known = nil
+        self._names = nil
         return self
     end
 

@@ -101,6 +101,18 @@ local function ensureSource(self)
 
         local w = windowMod()
         if not w or type(w._newWindow) ~= "function" then return end
+
+        -- Gate "positive" events (moved/created/shown) to the same universe getWindows
+        -- returns -- visible, titled top-level windows -- so the chatty LOCATIONCHANGE
+        -- stream doesn't deliver zero-size / untitled helper windows (IME hosts, DWM
+        -- surfaces) that pass the object/child check. Destroy/hide are not gated: the
+        -- window is gone or hidden by definition, so a visibility test is meaningless.
+        if event == W.locationChange or event == W.objectCreate or event == W.objectShow then
+            local vis = type(w._isVisible) == "function" and w._isVisible(hwnd)
+            local titled = type(w._titleOf) == "function" and w._titleOf(hwnd) ~= ""
+            if not (vis and titled) then return end
+        end
+
         local win = w._newWindow(hwnd)
         if not win then return end
 
