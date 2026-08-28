@@ -142,10 +142,12 @@ end
         local buf  = ffi.new("char[?]", #body)
         ffi.copy(buf, body, #body)
 
-        local cds = ffi.new("COPYDATASTRUCT")
-        cds.dwData = MAGIC
-        cds.cbData = #body
-        cds.lpData = buf
+        -- 1-element array so `cds` decays to a pointer when cast to LPARAM; a
+        -- by-value struct cdata has no reliable address-of in the FFI.
+        local cds = ffi.new("COPYDATASTRUCT[1]")
+        cds[0].dwData = MAGIC
+        cds[0].cbData = #body
+        cds[0].lpData = buf
 
         local selfHwnd = win            -- nil if this process never observes; harmless
         local resultBuf = ffi.new("uintptr_t[1]")
