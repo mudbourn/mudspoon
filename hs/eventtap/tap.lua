@@ -44,7 +44,12 @@ local KEY_TYPES = { keyDown = true, keyUp = true, flagsChanged = true }
             if type(posts) == "table" then
                 for _, e in ipairs(posts) do e:post() end
             end
-            return del == true
+            -- Swallow on ANY truthy first return, matching Hammerspoon (upstream reads
+            -- this via lua_toboolean, so anything but nil/false deletes the event). For
+            -- a callback following the documented (boolean, table) contract this equals
+            -- `del == true`; it only differs for a truthy-non-true return, where the
+            -- old strict check silently failed to swallow.
+            return del ~= nil and del ~= false
         end
     end
 
