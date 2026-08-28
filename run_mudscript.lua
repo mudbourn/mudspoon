@@ -76,8 +76,16 @@
             end
         end
 
+        -- HOME is the anchor the whole mac/ tree addresses itself through
+        -- (os.getenv("HOME").."/.hammerspoon/..."), and homeDir is the dir we ACTUALLY
+        -- booted .hammerspoon from (located by script position, not by HOME). These MUST
+        -- agree. An inherited real HOME (git-for-Windows sets HOME=C:/Users/<user>) would
+        -- otherwise win the fallback and send HOME-relative code -- notably ms_guardian's
+        -- trusted-hash lookup -- to a DIFFERENT, empty .hammerspoon, which reads as an
+        -- uninitialized manifest and BLOCKS boot. So HOME is a forced OVERRIDE here, not
+        -- a fallback; TMPDIR/MUDSPOON_SH stay fallbacks (a real value should win).
+        local override = { HOME = homeDir }
         local fallback = {
-            HOME   = homeDir,
             TMPDIR = realGetenv("TMPDIR") or realGetenv("TEMP") or realGetenv("TMP")
                      or (homeDir .. "/tmp"),
             -- If nothing was found, fall back to bare `sh` (works if it is on PATH).
@@ -85,7 +93,10 @@
             -- ONE-TIME warning is emitted below rather than per-call cmd.exe spam.
             MUDSPOON_SH = resolvedSh or "sh",
         }
-        os.getenv = function(k) return realGetenv(k) or fallback[k] end
+        os.getenv = function(k)
+            if override[k] ~= nil then return override[k] end
+            return realGetenv(k) or fallback[k]
+        end
 
         _G.__mudspoon_shResolved = (realGetenv("MUDSPOON_SH") ~= nil) or (resolvedSh ~= nil)
     end

@@ -55,7 +55,14 @@
     local shState  -- nil = unknown, then true/false
     local function shAvailable()
         if shState ~= nil then return shState end
-        local h = io.popen(shExe() .. ' -c "echo __MSH_OK__" 2>nul', "r")
+        -- shExe() is already quoted (run_mudscript quotes the resolved path, which may
+        -- live under "Program Files"). io.popen runs this via `cmd /c <str>`, and cmd
+        -- strips ONE outer quote pair -- which would eat the exe's own quotes and split
+        -- the path on its space. Wrap the whole line in an extra pair so cmd strips that
+        -- wrapper and leaves the inner quoting intact.
+        local probeCmd = shExe() .. ' -c "echo __MSH_OK__" 2>nul'
+        if IS_WINDOWS then probeCmd = '"' .. probeCmd .. '"' end
+        local h = io.popen(probeCmd, "r")
         local probe = h and h:read("*a") or ""
         if h then h:close() end
         shState = probe:find("__MSH_OK__", 1, true) ~= nil
@@ -85,8 +92,13 @@
         f:write(command, "\necho ", MARKER, "=$?\n")
         f:close()
 
-        -- Quote the (space-free-safe) path for cmd; sh reads the script from it.
-        local handle = io.popen(shExe() .. ' "' .. path .. '"', "r")
+        -- sh reads the script from the quoted path. shExe() is itself already quoted,
+        -- so wrap the whole command in an extra outer pair: io.popen's `cmd /c` strips
+        -- one pair, which must be this wrapper -- not the exe's own quotes (see the probe
+        -- above for the full cmd quote-stripping rationale).
+        local shCmd = shExe() .. ' "' .. path .. '"'
+        if IS_WINDOWS then shCmd = '"' .. shCmd .. '"' end
+        local handle = io.popen(shCmd, "r")
         if not handle then os.remove(path); return nil, "io.popen failed" end
         local out = handle:read("*a") or ""
         local ok = handle:close()

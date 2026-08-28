@@ -626,6 +626,13 @@ webview.usercontent = usercontent
     -- Deferred until ready.
     function Webview:html(str, baseURL)
         if NO_HTML then trace(":html() suppressed (MUDSPOON_WEBVIEW_NOHTML)"); return self end
+        -- NavigateToString takes a NUL-terminated LPCWSTR, so a single stray NUL byte
+        -- (0x00) ANYWHERE in the HTML silently TRUNCATES the document at that point --
+        -- dropping every later <script>/panel and leaving the shell a husk. NUL is never
+        -- valid in HTML, so strip any before marshalling: a corrupt source file must not
+        -- be able to decapitate the shell. (Root cause of one such husk was a NUL in a
+        -- panel-settings.js string literal.)
+        if type(str) == "string" then str = (str:gsub("%z", "")) end
         local w = toWide(injectHead(str, baseURL))
         whenReady(self, function()
             self._html_keep = w  -- hold the wide buffer across the (sync-copying) call
