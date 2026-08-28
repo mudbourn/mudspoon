@@ -247,28 +247,138 @@ BOOL   SetForegroundWindow(HWND);
     -- hs.application.frontmostApplication alias some code spells .frontmost...
     -- (kept as the canonical name only; no extra alias needed).
 
-    -- hs.application.watcher -- app activation/hide events. NOT wired to a real Win32
-    -- event source yet (needs SetWinEventHook with an anchored WINEVENTPROC). Provide
-    -- the CONSTANTS mac/ reads plus a no-op watcher object so watcher.new():start()
-    -- does not crash; it simply never fires. TODO: real SetWinEventHook on the rig.
+    -- hs.application.watcher -- app activation / launch / terminate / show / hide.
+    -- Backed by foundation's WinEvent source (host.onWinEvent). The callback fires as
+    -- fn(appName, eventType, appObject), matching Hammerspoon.
+    --
+    -- Windows has no per-application activation notion the way macOS does, so we derive
+    -- app-level events from window-level ones:
+    --   activated / deactivated : EVENT_SYSTEM_FOREGROUND (foreground window changed);
+    --                             the app owning the new front window is activated, the
+    --                             previous one deactivated.
+    --   launched / terminated   : first top-level window a pid opens => launched; the
+    --                             last one it closes => terminated. Seeded at start()
+    --                             from currently-open windows so already-running apps
+    --                             don't spuriously report launched/terminated.
+    --   hidden / unhidden       : a top-level window HIDE / SHOW (Windows has no true
+    --                             app-hide; this is the closest signal).
+    -- `launching` has no Win32 analog (no pre-launch signal) and never fires.
+    local pidBufW = ffi.new("DWORD[1]")
+    local function pidOfHwnd(hwnd)
+        if hwnd == nil then return nil end
+        pidBufW[0] = 0
+        U.GetWindowThreadProcessId(hwnd, pidBufW)
+        local p = tonumber(pidBufW[0])
+        return (p ~= 0) and p or nil
+    end
+    local function hwndId(hwnd) return tonumber(ffi.cast("intptr_t", hwnd)) end
+
     local watcherProto = {}
     watcherProto.__index = watcherProto
-    function watcherProto:start()  return self end
-    function watcherProto:stop()   return self end
+
+    function watcherProto:start()
+        if self._unsub then return self end
+        self._front   = nil   -- pid of the last-activated app
+        self._hwndPid = {}     -- hwndId -> pid (for launch/terminate bookkeeping)
+        self._appPids = {}     -- pid -> count of its live top-level windows we've seen
+        local W = host.winEvents
+
+        -- Seed from the current desktop so pre-existing apps aren't seen as launching.
+        local okwin, win = pcall(require, "hs.window")
+        if okwin and type(win) == "table" and type(win._enumTopLevel) == "function" then
+            for _, hwnd in ipairs(win._enumTopLevel()) do
+                local pid = pidOfHwnd(hwnd)
+                if pid then
+                    self._hwndPid[hwndId(hwnd)] = pid
+                    self._appPids[pid] = (self._appPids[pid] or 0) + 1
+                end
+            end
+        end
+        self._front = pidOfHwnd(U.GetForegroundWindow())
+
+        self._unsub = host.onWinEvent(function(event, hwnd, idObject, idChild)
+            local fn = self._fn
+            if not fn then return end
+
+            if event == W.foreground then
+                local pid = pidOfHwnd(hwnd)
+                if not pid or pid == self._front then return end
+                if self._front then
+                    local old = newApp(self._front)
+                    fn(old:name(), application.watcher.deactivated, old)
+                end
+                self._front = pid
+                local app = newApp(pid)
+                fn(app:name(), application.watcher.activated, app)
+                return
+            end
+
+            -- Everything below is window-object scoped: top-level windows only.
+            if idObject ~= W.OBJID_WINDOW or idChild ~= W.CHILDID_SELF then return end
+
+            if event == W.objectCreate then
+                local pid = pidOfHwnd(hwnd)
+                if not pid then return end
+                self._hwndPid[hwndId(hwnd)] = pid
+                local n = self._appPids[pid] or 0
+                self._appPids[pid] = n + 1
+                if n == 0 then
+                    local app = newApp(pid)
+                    fn(app:name(), application.watcher.launched, app)
+                end
+
+            elseif event == W.objectDestroy then
+                -- After destroy the HWND is dead, so resolve pid from our map, not the OS.
+                local id  = hwndId(hwnd)
+                local pid = self._hwndPid[id]
+                if not pid then return end
+                self._hwndPid[id] = nil
+                local n = (self._appPids[pid] or 1) - 1
+                if n <= 0 then
+                    self._appPids[pid] = nil
+                    local app = newApp(pid)
+                    fn(app:name(), application.watcher.terminated, app)
+                else
+                    self._appPids[pid] = n
+                end
+
+            elseif event == W.objectShow then
+                local pid = pidOfHwnd(hwnd)
+                if pid then
+                    local app = newApp(pid)
+                    fn(app:name(), application.watcher.unhidden, app)
+                end
+
+            elseif event == W.objectHide then
+                local pid = self._hwndPid[hwndId(hwnd)] or pidOfHwnd(hwnd)
+                if pid then
+                    local app = newApp(pid)
+                    fn(app:name(), application.watcher.hidden, app)
+                end
+            end
+        end)
+        return self
+    end
+
+    function watcherProto:stop()
+        if self._unsub then self._unsub(); self._unsub = nil end
+        self._hwndPid = nil
+        self._appPids = nil
+        return self
+    end
 
     application.watcher = {
         -- Event-type constants (values are arbitrary but must be stable + distinct).
-        launching  = 0,
-        launched   = 1,
-        terminated = 2,
-        hidden     = 3,
-        unhidden   = 4,
-        activated  = 5,
+        launching   = 0,   -- no Win32 analog; never fires (see note above)
+        launched    = 1,
+        terminated  = 2,
+        hidden      = 3,
+        unhidden    = 4,
+        activated   = 5,
         deactivated = 6,
-        new = function(_fn)
-            -- _fn(appName, eventType, appObject) would be called on events; unused
-            -- until a real event source is wired. Kept so the closure isn't GC-warned.
-            return setmetatable({ _fn = _fn }, watcherProto)
+        new = function(fn)
+            -- fn(appName, eventType, appObject) is called on each event once :start()'d.
+            return setmetatable({ _fn = fn }, watcherProto)
         end,
     }
 -- END --

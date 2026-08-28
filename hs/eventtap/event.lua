@@ -293,13 +293,11 @@ local event = {}
         otherMouseDown = "otherMouseDown", otherMouseUp  = "otherMouseUp",
         mouseMoved     = "mouseMoved",     scrollWheel   = "scrollWheel",
 
-        -- Constants the consumer references but which foundation's read hook does
-        -- NOT yet EMIT: flagsChanged (modifier press/release) and the drag types
-        -- (mouseMoved while a button is held). Defined so `event.types.flagsChanged`
-        -- resolves and comparisons don't silently test against nil -- but a tap on
-        -- these will not fire until foundation emits them (a separate, larger change
-        -- in the key/mouse hooks: flagsChanged needs modifier-transition tracking;
-        -- *Dragged needs button-state tracking on WM_MOUSEMOVE). See TODO note.
+        -- flagsChanged (modifier press/release) and the drag types (mouseMoved while
+        -- a button is held) are now genuinely EMITTED by foundation's read hook:
+        -- flagsChanged via modifier-transition tracking (foundation.lua:384) and the
+        -- *Dragged types via WM_MOUSEMOVE button-state tracking (foundation.lua:435).
+        -- A tap on any of these fires like the rest.
         flagsChanged       = "flagsChanged",
         leftMouseDragged   = "leftMouseDragged",
         rightMouseDragged  = "rightMouseDragged",

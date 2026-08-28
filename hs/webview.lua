@@ -339,9 +339,10 @@ BOOL    BringWindowToTop(HWND);
 -- END --
 -- NOTE re ICoreWebView2 slot comments above: the trailing numeric comments drift
 -- by the void* pads; the ANCHORS that matter are Navigate/NavigateToString right
--- after get_Source, ExecuteScript after the two ScriptToExecute slots, and
+-- after get_Source, add_NavigationCompleted right after remove_HistoryChanged
+-- (slot 15), ExecuteScript after the two ScriptToExecute slots, and
 -- add_WebMessageReceived after the two PostWebMessage slots. RISK: verify these
--- four positions against Microsoft's WebView2.h on the rig before trusting a call.
+-- positions against Microsoft's WebView2.h on the rig before trusting a call.
 
 -- Constants --
     local CP_UTF8           = 65001

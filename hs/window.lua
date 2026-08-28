@@ -23,6 +23,7 @@
 -- END --
 
 local ffi = require("ffi")
+local bit = require("bit")
 
 -- Foundation: shared types + the single loaded user32. --
     local host = require("hs.foundation")
@@ -43,6 +44,7 @@ BOOL  IsWindowVisible(HWND);
 BOOL  IsWindow(HWND);
 BOOL  IsIconic(HWND);
 BOOL  IsZoomed(HWND);
+long  GetWindowLongA(HWND, int);
 BOOL  EnumWindows(WNDENUMPROC, LPARAM);
 BOOL  BringWindowToTop(HWND);
 BOOL  ShowWindow(HWND, int);
@@ -59,6 +61,12 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
     local SWP_NOACTIVATE = 0x0010
     local SWP_NOSIZE     = 0x0001
     local SWP_NOMOVE     = 0x0002
+
+    -- GetWindowLongA indices + the style bits :isStandard() inspects.
+    local GWL_STYLE       = -16
+    local GWL_EXSTYLE     = -20
+    local WS_CAPTION      = 0x00C00000  -- has a title bar (normal app window)
+    local WS_EX_TOOLWINDOW = 0x00000080 -- palette/tool window (not a standard window)
 -- END --
 
 -- Real hs.geometry resolver (memoized only once a REAL one is found) --
@@ -133,11 +141,19 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
     end
 
     -- :frame() -> {x,y,w,h} numeric (or hs.geometry.rect when a real one is loaded)
-    -- THE crash-site contract. Falls back to a zero rect rather than nil so callers
-    -- doing arithmetic (f.x + f.w/2) never hit a nil index -- Hammerspoon's frame()
-    -- also always returns a rect for a live window.
+    -- for a live window. Previously this masqueraded a GetWindowRect failure as a
+    -- {0,0,0,0} rect so callers doing arithmetic never hit a nil index -- but that
+    -- fed a bogus origin into centering math (f.x + f.w/2), silently placing windows
+    -- at the wrong spot. A failure here means the HWND is dead or inaccessible, which
+    -- is a real error, so raise it loudly at the bad-window site rather than returning
+    -- geometry that is quietly wrong. Callers that may hold a stale handle should
+    -- check :isVisible()/existence first (as Hammerspoon callers do on a live window).
     function Window:frame()
-        local r = rectOf(self._hwnd) or { x = 0, y = 0, w = 0, h = 0 }
+        local r = rectOf(self._hwnd)
+        if not r then
+            error("hs.window:frame(): GetWindowRect failed (window " ..
+                  tostring(self._id) .. " is gone or inaccessible)", 2)
+        end
         local geo = geometry()
         if geo then return geo.rect(r.x, r.y, r.w, r.h) end
         return r
@@ -158,10 +174,17 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         return U.IsWindowVisible(self._hwnd) ~= 0
     end
 
-    -- :isStandard() -> best-effort true. A precise notion (has titlebar, not a
-    -- tool window) needs GetWindowLong style bits; not required by mac/ yet.
+    -- :isStandard() -> whether this is a normal application window: it has a title
+    -- bar (WS_CAPTION) and is not a palette/tool window (WS_EX_TOOLWINDOW). This is
+    -- the Windows analog of Hammerspoon's AXStandardWindow subrole check. An invalid
+    -- handle reports false (a dead window is not a standard window).
     function Window:isStandard()
-        return true
+        if self._hwnd == nil or U.IsWindow(self._hwnd) == 0 then return false end
+        local style = U.GetWindowLongA(self._hwnd, GWL_STYLE)
+        local ex    = U.GetWindowLongA(self._hwnd, GWL_EXSTYLE)
+        local hasCaption = bit.band(tonumber(style), WS_CAPTION) == WS_CAPTION
+        local isTool     = bit.band(tonumber(ex), WS_EX_TOOLWINDOW) ~= 0
+        return hasCaption and not isTool
     end
 
     -- :isMinimized() / :isFullScreen() -- mac/ reads isFullScreen() for debug text.

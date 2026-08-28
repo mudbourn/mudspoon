@@ -80,6 +80,11 @@ BOOL    QueryPerformanceFrequency(LONGLONG*);
 HHOOK   SetWindowsHookExA(int, HOOKPROC, HINSTANCE, DWORD);
 BOOL    UnhookWindowsHookEx(HHOOK);
 LRESULT CallNextHookEx(HHOOK, int, WPARAM, LPARAM);
+
+typedef void* HWINEVENTHOOK;
+typedef void (__stdcall *WINEVENTPROC)(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD);
+HWINEVENTHOOK SetWinEventHook(DWORD, DWORD, HMODULE, WINEVENTPROC, DWORD, DWORD, DWORD);
+BOOL    UnhookWinEvent(HWINEVENTHOOK);
 short   GetAsyncKeyState(int);
 BOOL    PeekMessageA(MSG*, HWND, UINT, UINT, UINT);
 BOOL    TranslateMessage(const MSG*);
@@ -110,6 +115,20 @@ DWORD   MsgWaitForMultipleObjects(DWORD, const HANDLE*, BOOL, DWORD, DWORD);
     local PM_REMOVE      = 0x0001
     local QS_ALLINPUT    = 0x04FF
     local INFINITE       = 0xFFFFFFFF
+
+    -- WinEvent (SetWinEventHook) constants. These name the OS-level UI notifications
+    -- host.onWinEvent surfaces; hs.application.watcher and hs.window.filter build on them.
+    local EVENT_SYSTEM_FOREGROUND     = 0x0003  -- foreground window changed
+    local EVENT_OBJECT_CREATE         = 0x8000
+    local EVENT_OBJECT_DESTROY        = 0x8001
+    local EVENT_OBJECT_SHOW           = 0x8002
+    local EVENT_OBJECT_HIDE           = 0x8003
+    local EVENT_OBJECT_LOCATIONCHANGE = 0x800B  -- moved/resized (chatty: fires per step)
+    local WINEVENT_OUTOFCONTEXT       = 0x0000  -- deliver via our message pump (no DLL inject)
+    local WINEVENT_SKIPOWNPROCESS     = 0x0002  -- never report our own windows
+    local OBJID_WINDOW                = 0        -- the window itself, not a child object
+    local CHILDID_SELF                = 0
+
 
     local VK_SHIFT       = 0x10
     local VK_CONTROL     = 0x11
@@ -144,6 +163,18 @@ local host = {
     C                = { user32 = U, kernel32 = K, gdi32 = G },
     moduleHandle     = K.GetModuleHandleA(nil),
     INJECTED_MAGIC   = INJECTED_MAGIC,
+    -- WinEvent codes surfaced to onWinEvent subscribers (numbers), so window.filter /
+    -- application.watcher can classify events without re-hardcoding the constants.
+    winEvents = {
+        foreground     = EVENT_SYSTEM_FOREGROUND,
+        objectCreate   = EVENT_OBJECT_CREATE,
+        objectDestroy  = EVENT_OBJECT_DESTROY,
+        objectShow     = EVENT_OBJECT_SHOW,
+        objectHide     = EVENT_OBJECT_HIDE,
+        locationChange = EVENT_OBJECT_LOCATIONCHANGE,
+        OBJID_WINDOW   = OBJID_WINDOW,
+        CHILDID_SELF   = CHILDID_SELF,
+    },
 }
 
 -- Monotonic Clock --
@@ -491,6 +522,74 @@ local host = {
     function host.onMouse(fn)
         return subscribe(mouseSubs, installMouseHook, uninstallMouseHook, fn)
     end
+
+    -- WinEvent source: OS-level UI-object notifications (foreground change, window
+    -- create/destroy/show/hide, move/resize). Unlike the LL hooks these are NOT
+    -- swallowable -- SetWinEventHook is notify-only, so subscriber return values are
+    -- ignored. fn receives (event, hwnd, idObject, idChild), all numbers/HWND cdata.
+    --
+    -- OUTOFCONTEXT delivery means the OS posts these to OUR thread and the callback
+    -- runs while we pump messages (host.run) -- same thread as everything else, no
+    -- extra runloop, and (like the LL hooks) entered from the jit.off'd pump so the
+    -- JIT never enters the FFI callback ("bad callback" panic). SKIPOWNPROCESS keeps
+    -- our own webview/alert windows from generating self-noise.
+    local winSubs  = {}
+    local winProc                   -- WINEVENTPROC; created ONCE, kept for the process
+                                    -- lifetime (a late in-flight call after UnhookWinEvent
+                                    -- must land on a live callback, not freed memory).
+    local winHooks = {}             -- HWINEVENTHOOK handles while installed
+
+    local function installWinHook()
+        if not winProc then
+            -- Body is a plain Lua function so it can be jit.off'd and pcall-driven: no
+            -- error may unwind out of the ffi.cast callback across the OS boundary.
+            local function winBody(_hook, event, hwnd, idObject, idChild)
+                event    = tonumber(event)
+                idObject = tonumber(idObject)
+                idChild  = tonumber(idChild)
+                for _, fn in ipairs(winSubs) do
+                    local ok, err = pcall(fn, event, hwnd, idObject, idChild)
+                    if not ok then
+                        io.stderr:write("mudspoon winevent handler error: " .. tostring(err) .. "\n")
+                    end
+                end
+            end
+            jit.off(winBody, true)
+            winProc = ffi.cast("WINEVENTPROC", function(hook, event, hwnd, idObj, idChild, thread, time)
+                local ok, err = pcall(winBody, hook, event, hwnd, idObj, idChild)
+                if not ok then io.stderr:write("mudspoon winevent hook error: " .. tostring(err) .. "\n") end
+            end)
+        end
+        if #winHooks == 0 then
+            -- Three narrow ranges rather than one broad [0x8000,0x800B] span: the middle
+            -- object events (reorder/focus/selection/statechange) are high-volume and
+            -- unused, so we skip them. FOREGROUND drives activation; CREATE..HIDE drive
+            -- launch/terminate/show/hide; LOCATIONCHANGE drives move/resize.
+            -- hmodWinEventProc MUST be NULL for WINEVENT_OUTOFCONTEXT (the callback is
+            -- in our own process, not an injected DLL). idProcess/idThread 0 = all.
+            local flags = bit.bor(WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS)
+            winHooks = {
+                U.SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nil, winProc, 0, 0, flags),
+                U.SetWinEventHook(EVENT_OBJECT_CREATE,     EVENT_OBJECT_HIDE,       nil, winProc, 0, 0, flags),
+                U.SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nil, winProc, 0, 0, flags),
+            }
+            local any = false
+            for _, h in ipairs(winHooks) do if h ~= nil then any = true end end
+            if not any then error("SetWinEventHook failed (all ranges)") end
+        end
+    end
+
+    -- Remove the hooks but KEEP winProc alive (see installKeyHook rationale).
+    local function uninstallWinHook()
+        for i = 1, #winHooks do
+            if winHooks[i] ~= nil then U.UnhookWinEvent(winHooks[i]) end
+        end
+        winHooks = {}
+    end
+
+    function host.onWinEvent(fn)
+        return subscribe(winSubs, installWinHook, uninstallWinHook, fn)
+    end
 -- END --
 
 -- Runloop --
@@ -533,6 +632,7 @@ local host = {
         host.stop()
         uninstallKeyHook()
         uninstallMouseHook()
+        uninstallWinHook()
     end
 -- END --
 
