@@ -108,6 +108,18 @@ local json = {}
             end
         elseif t == "nil" then
             return "null"
+        elseif t == "cdata" then
+            -- LuaJIT-only: a raw FFI number (int64/uint64/double cdata) reaches here
+            -- when a Windows shim hands the config a number in cdata form -- Mac has a
+            -- plain Lua number for the same value, so NSJSONSerialization never sees
+            -- this case. Coerce numeric cdata to a Lua number so the payload encodes
+            -- identically to Mac; without this, ONE such value anywhere in a state
+            -- table threw and blanked the whole panel that carried it (e.g. the Settings/
+            -- Tools/Appearance/Profiles hydration payload). Non-numeric cdata is still
+            -- genuinely unencodable.
+            local n = tonumber(v)
+            if n then return encodeNumber(n) end
+            error("hs.json: cannot encode non-numeric cdata value", 0)
         else
             error("hs.json: cannot encode value of type " .. t, 0)
         end
