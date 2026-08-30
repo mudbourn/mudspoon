@@ -145,6 +145,30 @@ foreach ($d in @('defaults','active','macro')) {
 # 6. MANIFEST.json.
 Copy-File (Join-Path $Repo 'MANIFEST.json') (Join-Path $HS 'MANIFEST.json')
 
+# 6b. Gamepad reader (Windows analogue of deploy.sh's swiftc ms_gc_read step).
+# ms.gamepadStart launches $HOME/.local/bin/ms_gc_read.exe; run_mudscript.lua
+# shims HOME to the dir containing .hammerspoon, i.e. the parent of $HS. The exe
+# is prebuilt from mudscript/win/bin (build it with win\bin\build.bat) and needs
+# SDL2.dll beside it. If it isn't built yet we skip, mirroring how the swiftc
+# binaries are skipped on macOS-isms — controller input is simply unavailable
+# until the reader is built.
+$homeDir  = Split-Path -Parent $HS
+$localBin = Join-Path $homeDir '.local\bin'
+$readerSrc = Join-Path $Repo 'win\bin\ms_gc_read.exe'
+if (Test-Path $readerSrc) {
+    New-Item -ItemType Directory -Force -Path $localBin | Out-Null
+    Copy-File $readerSrc (Join-Path $localBin 'ms_gc_read.exe')
+    $sdlSrc = Join-Path $Repo 'win\bin\SDL2.dll'
+    if (Test-Path $sdlSrc) {
+        Copy-File $sdlSrc (Join-Path $localBin 'SDL2.dll')
+        Write-Host "deploy: gamepad reader -> $localBin\ms_gc_read.exe (+ SDL2.dll)"
+    } else {
+        Write-Warning "deploy: ms_gc_read.exe deployed but SDL2.dll missing beside it; the reader will not start until SDL2.dll is present in $localBin."
+    }
+} else {
+    Write-Host "deploy: no win\bin\ms_gc_read.exe yet (build with win\bin\build.bat to enable controller input); skipping."
+}
+
 # 7. Build number (resets when stable version changes) — mirrors deploy.sh.
 $dataDir = Join-Path $HS 'data'
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Force -Path $dataDir | Out-Null }
