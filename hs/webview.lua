@@ -1081,6 +1081,22 @@ webview.usercontent = usercontent
     -- Keeping webview.new interpreted aborts any trace before the CreateWindowExA
     -- C-call, so the callback is only ever entered from the interpreter.
     jit.off(webview.new)
+
+    -- Same hazard, same fix for every OTHER window op whose Win32 call synchronously
+    -- re-enters our class wndProc before returning: ShowWindow (:show/:hide),
+    -- SetWindowPos (:bringToFront/:level), MoveWindow (pushBounds, reached via
+    -- :frame/:setFrame), DestroyWindow (:delete -> WM_DESTROY/WM_NCDESTROY). These run
+    -- on the warm panel show/hide/move/close paths, so any of them could fastfail once
+    -- traced. (SetWindowLongA/SetLayeredWindowAttributes/GetWindowLongA in :alpha,
+    -- :allowTextEntry, :windowStyle do NOT dispatch to the wndProc, so they are left
+    -- JIT-eligible.) pushBounds is the sole C-call site for :frame/:setFrame, so
+    -- guarding it covers both.
+    jit.off(pushBounds)
+    jit.off(Webview.show)
+    jit.off(Webview.hide)
+    jit.off(Webview.bringToFront)
+    jit.off(Webview.level)
+    jit.off(Webview.delete)
 -- END --
 
 return webview
