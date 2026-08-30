@@ -1070,6 +1070,17 @@ webview.usercontent = usercontent
         startBringUp(self)
         return self
     end
+
+    -- CreateWindowExA (above) synchronously dispatches WM_NCCREATE/WM_CREATE to our
+    -- class wndProc -- an ffi.cast callback -- BEFORE it returns. LuaJIT cannot enter
+    -- a callback from JIT-compiled mcode ("PANIC: ... bad callback"), and jit.off on
+    -- the callback body does NOT help: the offending trace is the CALLER that makes
+    -- the C call (see hs/foundation.lua's host.run note). At boot the shell/loading
+    -- webviews are created cold, but a popout opened later runs webview.new while the
+    -- panel-open path is JIT-warm -> the "first open of the browse panel" fastfail.
+    -- Keeping webview.new interpreted aborts any trace before the CreateWindowExA
+    -- C-call, so the callback is only ever entered from the interpreter.
+    jit.off(webview.new)
 -- END --
 
 return webview
