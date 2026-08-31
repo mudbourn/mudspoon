@@ -12,9 +12,14 @@ local json = {}
 
 -- Encoder --
     -- Array vs object: a table is an array only if every key is a contiguous
-    -- integer 1..n. Everything else (including the empty table, matching
-    -- Hammerspoon) is an object. nil values simply never appear, since Lua
-    -- tables cannot hold them -- that lossiness is the documented HS behavior.
+    -- integer 1..n. The EMPTY table is an array too -- real Hammerspoon encodes
+    -- {} as "[]" (its own test_json.lua asserts hs.json.encode({}) == "[]"), so
+    -- the port must match: encoding empty as "{}" gives JS an object where the
+    -- shell expects an array, and `for...of S.userMenus` (etc.) THROWS on the
+    -- empty-data case -- which blanked the Tools/Profiles/Appearance/Plugins
+    -- panels on a fresh install (the settings hydration cascade aborts mid-way).
+    -- nil values simply never appear, since Lua tables cannot hold them -- that
+    -- lossiness is the documented HS behavior.
     local function isArray(t)
         local n = 0
         for k in pairs(t) do
@@ -24,7 +29,7 @@ local json = {}
         for i = 1, n do
             if t[i] == nil then return false end  -- hole => object
         end
-        return n > 0
+        return true  -- all keys contiguous 1..n (or none) => array; {} => []
     end
 
     -- JSON string escapes. `/` may stay literal (spec allows it), so we leave it

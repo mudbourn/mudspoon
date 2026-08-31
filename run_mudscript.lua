@@ -47,6 +47,33 @@
     local hsDir = homeDir .. "/.hammerspoon"          -- the actual config/install dir
 -- END --
 
+-- Capture C-level stderr (LuaJIT panics / CRT abort / fastfail) to a file --
+    -- The detached launcher discards stderr, so a LuaJIT "PANIC: ..." or a CRT
+    -- abort()/__fastfail -- which write to the C stderr FILE*, NOT through the app's
+    -- own stdout logging -- vanished: a crash left hammerspoon.log simply stopping
+    -- mid-line with no reason recorded. Rebind the process's stderr FILE* to
+    -- data/stderr.log with freopen so any such write is preserved on disk. Append
+    -- mode (not truncate) so a crash survives an immediate relaunch; a header marks
+    -- each boot. Best-effort and non-fatal: guarded end-to-end, and a CRT without
+    -- __acrt_iob_func (pre-UCRT msvcrt) simply skips. Lua's io.stderr wraps this same
+    -- FILE*, so its :write()s follow along -- stderr is centralised here either way.
+    pcall(function()
+        local ffi = require("ffi")
+        pcall(ffi.cdef, [[
+            void* __acrt_iob_func(unsigned);
+            void* freopen(const char*, const char*, void*);
+            int   fputs(const char*, void*);
+            int   fflush(void*);
+        ]])
+        local se = ffi.C.__acrt_iob_func(2)          -- stderr is iob index 2 on UCRT
+        if se ~= nil and ffi.C.freopen(hsDir .. "/data/stderr.log", "a", se) ~= nil then
+            ffi.C.fputs("\n===== stderr capture: boot " ..
+                os.date("%Y-%m-%d %H:%M:%S") .. " (pid follows in log) =====\n", se)
+            ffi.C.fflush(se)
+        end
+    end)
+-- END --
+
 -- Make os.getenv("HOME") resolve (Windows has USERPROFILE, not HOME) --
     -- Shimmed rather than set via _putenv: LuaJIT's os.getenv reads the CRT env, and
     -- which CRT wins is fragile on Windows. A wrapper is portable and total: mac/ sees

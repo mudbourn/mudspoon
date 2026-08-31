@@ -103,6 +103,7 @@ local bit = require("bit")
     -- there instead of taking down boot. ole32 (COM apartment + CoTaskMemFree) is a
     -- system DLL and effectively always present, but is loaded on the same path.
     local Loader, Ole  -- populated by ensureLibs()
+    local Dwm          -- dwmapi (corner rounding); nil if unavailable
 
     local function ensureLibs()
         if Loader and Ole then return end
@@ -114,6 +115,11 @@ local bit = require("bit")
         end
         Loader = l
         Ole    = ffi.load("ole32")
+
+        -- dwmapi is a Win11 system DLL; used only for corner rounding, so a failed
+        -- load is non-fatal (Dwm stays nil and rounding is simply skipped).
+        local okd, d = pcall(ffi.load, "dwmapi")
+        Dwm = okd and d or nil
 
         -- COM must be initialized on the thread that pumps WebView2's messages.
         -- new() is called from mac/ on the runloop thread, so init here (once).
@@ -317,6 +323,14 @@ HRESULT CreateCoreWebView2EnvironmentWithOptions(LPCWSTR, LPCWSTR, void*, EnvHan
 long CoInitializeEx(void*, unsigned long);
 void CoTaskMemFree(void*);
 
+/* --- DWM window corner rounding (dwmapi; Windows 11) ---
+ * Round the HOST window's corners in the compositor. The layered LWA_ALPHA host
+ * gives only uniform alpha, so the page's own antialiased border-radius fringe
+ * cannot composite per-pixel and renders rough. Letting DWM round the window frame
+ * clips the corner smoothly (real per-pixel AA in the compositor). Win11-only; the
+ * call is pcall-guarded and no-ops (returns a failure HRESULT) on older Windows. */
+long DwmSetWindowAttribute(HWND, unsigned long, const void*, unsigned long);
+
 /* --- UTF-8 <-> UTF-16 (kernel32) --- */
 int MultiByteToWideChar(unsigned int, unsigned long, LPCSTR, int, LPWSTR, int);
 int WideCharToMultiByte(unsigned int, unsigned long, LPCWSTR, int, LPSTR, int, LPCSTR, void*);
@@ -382,6 +396,14 @@ BOOL    BringWindowToTop(HWND);
     local E_NOINTERFACE     = ffi.cast("long", 0x80004002)
 
     local CLASS             = "HammerspoonWebView"
+
+    -- DWM corner rounding (Win11). DWMWA_WINDOW_CORNER_PREFERENCE=33; value is one of
+    -- DWMWCP_DEFAULT=0, DWMWCP_DONOTROUND=1, DWMWCP_ROUND=2 (~8px), DWMWCP_ROUNDSMALL=3
+    -- (~4px). ROUND smooths the corner in the compositor, hiding the rough per-pixel
+    -- fringe the layered host can't blend. NOTE: DWM's radius is fixed; it only fully
+    -- covers the page's rough fringe when the CSS border-radius is <= DWM's radius.
+    local DWMWA_WINDOW_CORNER_PREFERENCE = 33
+    local DWMWCP_ROUND                   = 2
 -- END --
 
 -- windowMasks (public constants; bit-flag integers) --
@@ -525,14 +547,23 @@ webview.usercontent = usercontent
     end
 
     -- Push the current self._rect to both the host window and the controller bounds.
+    -- MoveWindow uses bRepaint=FALSE: a TRUE repaint invalidates the freshly-grown host
+    -- client region, and since wndProc claims WM_ERASEBKGND without filling AND the page
+    -- leaves its rounded-corner pixels transparent, that exposed region shows the stale
+    -- (black) layered surface until WebView2 repaints -- which at the transparent corners
+    -- is never. The result is BLACK CORNER RADII after a resize. Suppressing the host
+    -- invalidate lets the WebView2 controller's own put_Bounds be the sole painter of the
+    -- new area, so the corners stay transparent. Grow the controller bounds FIRST so the
+    -- child already covers the new extent before the host frame reaches it.
     local function pushBounds(self)
         local r = self._rect
-        U.MoveWindow(self._hwnd, logi(r.x), logi(r.y), logi(r.w), logi(r.h), 1)
+        local pw, ph = logi(r.w), logi(r.h)
         if self._controller ~= nil then
             local rc = ffi.new("RECT")
-            rc.left, rc.top, rc.right, rc.bottom = 0, 0, logi(r.w), logi(r.h)  -- physical client px
+            rc.left, rc.top, rc.right, rc.bottom = 0, 0, pw, ph  -- physical client px
             self._controller.lpVtbl.put_Bounds(self._controller, rc)
         end
+        U.MoveWindow(self._hwnd, logi(r.x), logi(r.y), pw, ph, 0)
     end
 
     -- :frame([rect]) -- getter with no arg, setter with a rect. Returns rect (getter)
@@ -1048,6 +1079,19 @@ webview.usercontent = usercontent
         -- birth, so the physical/logical gap is never visible.
         U.SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA)
 
+        -- Ask DWM to round the host corners (Win11). This smooths the corner in the
+        -- compositor, so the page's antialiased border-radius fringe -- which the
+        -- uniform-alpha layered host cannot composite per-pixel and otherwise renders
+        -- rough -- is clipped cleanly. Best-effort: pcall-guarded, and a no-op where
+        -- dwmapi is missing (Dwm nil) or the OS is too old (call returns a failure HR).
+        if Dwm then
+            local pref = ffi.new("unsigned long[1]", DWMWCP_ROUND)
+            pcall(function()
+                Dwm.DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, pref, 4)
+            end)
+            trace("new(): DwmSetWindowAttribute(CORNER_PREFERENCE=ROUND) attempted")
+        end
+
         local self = setmetatable({
             _hwnd           = hwnd,
             _rect           = r,
@@ -1083,20 +1127,28 @@ webview.usercontent = usercontent
     jit.off(webview.new)
 
     -- Same hazard, same fix for every OTHER window op whose Win32 call synchronously
-    -- re-enters our class wndProc before returning: ShowWindow (:show/:hide),
-    -- SetWindowPos (:bringToFront/:level), MoveWindow (pushBounds, reached via
-    -- :frame/:setFrame), DestroyWindow (:delete -> WM_DESTROY/WM_NCDESTROY). These run
-    -- on the warm panel show/hide/move/close paths, so any of them could fastfail once
-    -- traced. (SetWindowLongA/SetLayeredWindowAttributes/GetWindowLongA in :alpha,
-    -- :allowTextEntry, :windowStyle do NOT dispatch to the wndProc, so they are left
-    -- JIT-eligible.) pushBounds is the sole C-call site for :frame/:setFrame, so
-    -- guarding it covers both.
+    -- re-enters our class wndProc before returning:
+    --   ShowWindow                (:show/:hide)                -> WM_SHOWWINDOW/paint
+    --   SetWindowPos              (:bringToFront/:level)       -> WM_WINDOWPOS*/paint
+    --   MoveWindow                (pushBounds, :frame/:setFrame)-> WM_WINDOWPOS*/WM_SIZE
+    --   DestroyWindow             (:delete)                    -> WM_DESTROY/WM_NCDESTROY
+    --   SetLayeredWindowAttributes(:alpha)                     -> WM_ERASEBKGND
+    -- :alpha is the DANGEROUS one: the shell/loading/curtain fades animate it from a
+    -- ~8ms repeating timer (30 steps/open), so that closure goes JIT-hot within a few
+    -- opens and then makes the SetLayeredWindowAttributes C-call from compiled mcode --
+    -- which our wndProc receives as a synchronous WM_ERASEBKGND ("alpha-change", see
+    -- the wndProc note) -> "bad callback" fastfail on shell/panel open. (This is why
+    -- an earlier version that left :alpha JIT-eligible still crashed on open.)
+    -- SetWindowLongA/GetWindowLongA in :allowTextEntry/:windowStyle do NOT dispatch to
+    -- the wndProc and are one-shot config, so they stay JIT-eligible. pushBounds is the
+    -- sole C-call site for :frame/:setFrame, so guarding it covers both.
     jit.off(pushBounds)
     jit.off(Webview.show)
     jit.off(Webview.hide)
     jit.off(Webview.bringToFront)
     jit.off(Webview.level)
     jit.off(Webview.delete)
+    jit.off(Webview.alpha)
 -- END --
 
 return webview
