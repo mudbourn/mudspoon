@@ -172,6 +172,22 @@ if (Test-Path $readerSrc) {
 # 7. Build number (resets when stable version changes) — mirrors deploy.sh.
 $dataDir = Join-Path $HS 'data'
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Force -Path $dataDir | Out-Null }
+
+# 7a. Bundled registry index. The client reads data/registry_index.json as the
+# offline / first-paint source for the Browse library. It is signed, and the
+# client re-canonicalizes and verifies it against the shipped public key. The
+# ONLY correct bytes are the current signed registry/index.json; any other copy
+# (an older hand-committed data/registry_index.json) has a body that no longer
+# matches its embedded signature, so verify fails and Browse shows no packages.
+# So sync it from the source-of-truth on every deploy. (macOS mostly hides this
+# by refreshing over the network, where the bundled file is just a fallback.)
+$regSrc = Join-Path $Repo 'registry\index.json'
+if (Test-Path $regSrc) {
+    Copy-File $regSrc (Join-Path $dataDir 'registry_index.json')
+    Write-Host "deploy: bundled registry index -> data\registry_index.json (signed source-of-truth)"
+} else {
+    Write-Warning "deploy: $regSrc missing; leaving data\registry_index.json as-is (Browse may be stale/empty offline)."
+}
 $buildNumFile  = Join-Path $dataDir '.ms_build_num'
 $buildBaseFile = Join-Path $dataDir '.ms_build_base'
 $manifestJson  = Get-Content (Join-Path $HS 'MANIFEST.json') -Raw | ConvertFrom-Json
