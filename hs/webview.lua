@@ -53,6 +53,7 @@ local bit = require("bit")
     local host = require("hs.foundation")
     local U     = host.C.user32
     local K     = host.C.kernel32
+    local G     = host.C.gdi32
     local hInst = host.moduleHandle
 -- END --
 
@@ -349,6 +350,15 @@ long    GetWindowLongA(HWND, int);
 long    SetWindowLongA(HWND, int, long);
 BOOL    SetForegroundWindow(HWND);
 BOOL    BringWindowToTop(HWND);
+int     SetWindowRgn(HWND, HRGN, BOOL);
+
+/* --- Variable corner rounding via a window region (gdi32 + user32) ---
+ * DWM's DWMWA_WINDOW_CORNER_PREFERENCE only offers fixed radii (~8 / ~4 / 0), so it
+ * cannot track a theme's windowRadius. A rounded-rect region clips the HOST window to
+ * an arbitrary radius; the layered surface beyond the region is simply not shown, so
+ * the corners read at exactly the theme radius. HRGN is declared by hs.foundation. */
+HRGN    CreateRoundRectRgn(int, int, int, int, int, int);
+BOOL    DeleteObject(void*);
 ]]
 -- END --
 -- NOTE re ICoreWebView2 slot comments above: the trailing numeric comments drift
@@ -403,6 +413,7 @@ BOOL    BringWindowToTop(HWND);
     -- fringe the layered host can't blend. NOTE: DWM's radius is fixed; it only fully
     -- covers the page's rough fringe when the CSS border-radius is <= DWM's radius.
     local DWMWA_WINDOW_CORNER_PREFERENCE = 33
+    local DWMWCP_DONOTROUND              = 1
     local DWMWCP_ROUND                   = 2
 -- END --
 
@@ -555,6 +566,30 @@ webview.usercontent = usercontent
     -- invalidate lets the WebView2 controller's own put_Bounds be the sole painter of the
     -- new area, so the corners stay transparent. Grow the controller bounds FIRST so the
     -- child already covers the new extent before the host frame reaches it.
+    -- Clip the host window to a rounded rectangle at self._cornerRadius (LOGICAL px,
+    -- theme-driven). SetWindowRgn takes ownership of the HRGN on success, so we do NOT
+    -- DeleteObject it; on failure (returns 0) we free it to avoid a GDI leak. A radius
+    -- <= 0 clears any prior region (square corners). The region is in PHYSICAL client
+    -- px, matching MoveWindow's sizing, so radius scales with DPI. +1 on w/h because
+    -- CreateRoundRectRgn's far edge is exclusive (mirrors hs/alert/window.lua). Must be
+    -- re-applied after every resize -- a region is fixed to the extent it was built for.
+    local function applyCornerRegion(self)
+        if self._deleted or self._hwnd == nil then return end
+        local r = self._rect
+        local rad = self._cornerRadius or 0
+        if rad <= 0 then
+            U.SetWindowRgn(self._hwnd, nil, 1)  -- clear region -> square corners
+            return
+        end
+        local pw, ph = logi(r.w), logi(r.h)
+        local prad = logi(rad) * 2  -- CreateRoundRectRgn wants the ellipse diameter
+        local rgn = G.CreateRoundRectRgn(0, 0, pw + 1, ph + 1, prad, prad)
+        if rgn ~= nil then
+            local ok = U.SetWindowRgn(self._hwnd, rgn, 1)
+            if ok == 0 then pcall(function() G.DeleteObject(rgn) end) end
+        end
+    end
+
     local function pushBounds(self)
         local r = self._rect
         local pw, ph = logi(r.w), logi(r.h)
@@ -564,6 +599,7 @@ webview.usercontent = usercontent
             self._controller.lpVtbl.put_Bounds(self._controller, rc)
         end
         U.MoveWindow(self._hwnd, logi(r.x), logi(r.y), pw, ph, 0)
+        applyCornerRegion(self)  -- region is extent-specific; rebuild for the new size
     end
 
     -- :frame([rect]) -- getter with no arg, setter with a rect. Returns rect (getter)
@@ -584,6 +620,28 @@ webview.usercontent = usercontent
     -- :setFrame(rect) -- explicit setter alias.
     function Webview:setFrame(rect)
         self:frame(rect)
+        return self
+    end
+
+    -- :cornerRadius([r]) -- getter with no arg; setter with a LOGICAL-px radius. Rounds
+    -- the host window's corners to `r` via a window region so the radius tracks the theme
+    -- (windowRadius) instead of DWM's fixed ~8px. 0 restores square corners. This is a
+    -- Windows-only extension to the Hammerspoon API (a no-op-shaped method on mac, where
+    -- the shell rounds itself in CSS on a transparent WKWebView). Returns self (setter).
+    function Webview:cornerRadius(r)
+        if r == nil then return self._cornerRadius or 0 end
+        self._cornerRadius = math.max(0, tonumber(r) or 0)
+        -- Hand rounding authority to the region: DWM's fixed ~8px preference would
+        -- otherwise still round the frame (and re-round the corners even when the theme
+        -- asks for square, radius 0). Turn it off once we take over. Best-effort.
+        if Dwm and not self._dwmOff then
+            local pref = ffi.new("unsigned long[1]", DWMWCP_DONOTROUND)
+            pcall(function()
+                Dwm.DwmSetWindowAttribute(self._hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, pref, 4)
+            end)
+            self._dwmOff = true
+        end
+        if not self._deleted then applyCornerRegion(self) end
         return self
     end
 
@@ -1149,6 +1207,15 @@ webview.usercontent = usercontent
     jit.off(Webview.level)
     jit.off(Webview.delete)
     jit.off(Webview.alpha)
+    -- Corner rounding: SetWindowRgn (applyCornerRegion) dispatches WM_WINDOWPOS*/
+    -- WM_NCCALCSIZE and DwmSetWindowAttribute (Webview.cornerRadius) can dispatch to
+    -- the wndProc synchronously -- both are C-calls that re-enter the FFI callback, so
+    -- both must stay interpreted. applyCornerRegion is ALSO reached from the (already
+    -- off) pushBounds, but jit.off on the caller does NOT cover a separately-compiled
+    -- callee, so it needs its own guard: without it a reload (JIT already warm) hits
+    -- "bad callback" on the first shell frame while a cold fresh boot slips through.
+    jit.off(applyCornerRegion)
+    jit.off(Webview.cornerRadius)
 -- END --
 
 return webview

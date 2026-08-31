@@ -20,6 +20,23 @@
     --   MUDSCRIPT_ROOT defaults to $MUDSCRIPT_HOME, else a sibling ../mudscript.
 -- END --
 
+-- Lua 5.2+ compat: table.pack / table.unpack on LuaJIT (5.1) --
+    -- Hammerspoon's macOS LuaJIT is built with LUAJIT_ENABLE_LUA52COMPAT, so mac/ code
+    -- freely calls table.pack / table.unpack (e.g. ms_devtools' console eval:
+    -- `table.pack(pcall(fn))`). This rig's LuaJIT lacks that compat, so table.pack is
+    -- nil ("attempt to call field 'pack' (a nil value)") and table.unpack is missing.
+    -- Provide both, matching the reference semantics (pack sets the field `n`). Only
+    -- fill gaps -- never clobber a real implementation if one is present.
+    if not table.pack then
+        table.pack = function(...)
+            return { n = select("#", ...), ... }
+        end
+    end
+    if not table.unpack then
+        table.unpack = unpack   -- LuaJIT keeps the 5.1 global `unpack`
+    end
+-- END --
+
 -- Locate the trees + the HOME mudscript installs under --
     -- This file sits at the mudspoon repo root; hs/ is beside it.
     local here = (arg[0] or "run_mudscript.lua"):gsub("[^/\\]*$", "")
