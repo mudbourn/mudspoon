@@ -10,3 +10,4 @@ docs/parity-audit-2026-08.md
 smoke_report_*.json
 test/backup/.DS_Store
 test/backup/initのコピー.lua
+ignore/
