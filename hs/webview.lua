@@ -332,6 +332,15 @@ void CoTaskMemFree(void*);
  * call is pcall-guarded and no-ops (returns a failure HRESULT) on older Windows. */
 long DwmSetWindowAttribute(HWND, unsigned long, const void*, unsigned long);
 
+/* --- DWM glass client area (dwmapi) ---
+ * Extend the compositor frame across the whole client area (margins -1) so pixels the
+ * app leaves transparent show the desktop with true per-pixel alpha. With a transparent
+ * WebView2 background this lets the PAGE draw its own antialiased rounded corner and 1px
+ * outline at any radius -- macOS parity, no window region, no fixed DWM tier. Requires
+ * the host NOT be WS_EX_LAYERED/LWA_ALPHA (that mode flattens per-pixel alpha). */
+typedef struct { int cxLeftWidth; int cxRightWidth; int cyTopHeight; int cyBottomHeight; } MARGINS;
+long DwmExtendFrameIntoClientArea(HWND, const MARGINS*);
+
 /* --- UTF-8 <-> UTF-16 (kernel32) --- */
 int MultiByteToWideChar(unsigned int, unsigned long, LPCSTR, int, LPWSTR, int);
 int WideCharToMultiByte(unsigned int, unsigned long, LPCWSTR, int, LPSTR, int, LPCSTR, void*);
@@ -352,13 +361,6 @@ BOOL    SetForegroundWindow(HWND);
 BOOL    BringWindowToTop(HWND);
 int     SetWindowRgn(HWND, HRGN, BOOL);
 
-/* --- Variable corner rounding via a window region (gdi32 + user32) ---
- * DWM's DWMWA_WINDOW_CORNER_PREFERENCE only offers fixed radii (~8 / ~4 / 0), so it
- * cannot track a theme's windowRadius. A rounded-rect region clips the HOST window to
- * an arbitrary radius; the layered surface beyond the region is simply not shown, so
- * the corners read at exactly the theme radius. HRGN is declared by hs.foundation. */
-HRGN    CreateRoundRectRgn(int, int, int, int, int, int);
-BOOL    DeleteObject(void*);
 ]]
 -- END --
 -- NOTE re ICoreWebView2 slot comments above: the trailing numeric comments drift
@@ -415,6 +417,22 @@ BOOL    DeleteObject(void*);
     local DWMWA_WINDOW_CORNER_PREFERENCE = 33
     local DWMWCP_DONOTROUND              = 1
     local DWMWCP_ROUND                   = 2
+    local DWMWCP_ROUNDSMALL              = 3
+
+    -- Border color (Win11 build 22000+). DWMWA_BORDER_COLOR=34; value is a COLORREF.
+    -- DWMWA_COLOR_DEFAULT lets the system paint its own subtle 1px frame -- the same
+    -- faint outline every native rounded window carries, whose absence reads as "the
+    -- window has no edge". DWM draws it only on windows it is also rounding.
+    local DWMWA_BORDER_COLOR             = 34
+    local DWMWA_COLOR_DEFAULT            = 0xFFFFFFFF
+
+    -- Glass spike (opt-in via MUDSPOON_GLASS=1): host the webview on a DWM glass window
+    -- instead of a layered LWA_ALPHA one, so the page draws its own rounded corner and
+    -- outline (macOS parity) at a live, arbitrary radius. Off by default -- the layered
+    -- path is untouched. Windowed WebView2 transparency is runtime-dependent, so this is
+    -- a probe: if corners render as desktop it is the parity fix, if they render black
+    -- the composition controller is required instead.
+    local GLASS = os.getenv("MUDSPOON_GLASS") == "1"
 -- END --
 
 -- windowMasks (public constants; bit-flag integers) --
@@ -566,28 +584,34 @@ webview.usercontent = usercontent
     -- invalidate lets the WebView2 controller's own put_Bounds be the sole painter of the
     -- new area, so the corners stay transparent. Grow the controller bounds FIRST so the
     -- child already covers the new extent before the host frame reaches it.
-    -- Clip the host window to a rounded rectangle at self._cornerRadius (LOGICAL px,
-    -- theme-driven). SetWindowRgn takes ownership of the HRGN on success, so we do NOT
-    -- DeleteObject it; on failure (returns 0) we free it to avoid a GDI leak. A radius
-    -- <= 0 clears any prior region (square corners). The region is in PHYSICAL client
-    -- px, matching MoveWindow's sizing, so radius scales with DPI. +1 on w/h because
-    -- CreateRoundRectRgn's far edge is exclusive (mirrors hs/alert/window.lua). Must be
-    -- re-applied after every resize -- a region is fixed to the extent it was built for.
+    -- Round the host window's corners in the DWM compositor at the nearest tier to
+    -- self._cornerRadius, and let the system paint its subtle 1px border. DWM rounds
+    -- (and borders) with true per-pixel AA, which the uniform-alpha layered host cannot
+    -- do itself -- so this reads smooth where a SetWindowRgn clip read pixelated and
+    -- borderless. DWM offers only fixed tiers, so the exact theme radius snaps: 0 stays
+    -- square, a small radius maps to ROUNDSMALL (~4px), anything larger to ROUND (~8px).
+    -- The attributes are window-level (not extent-specific), so they survive resizes
+    -- and need no rebuild in pushBounds. Any region left by an older build is cleared so
+    -- it cannot re-alias the corners. Best-effort: no-op where dwmapi is absent.
     local function applyCornerRegion(self)
         if self._deleted or self._hwnd == nil then return end
-        local r = self._rect
+        U.SetWindowRgn(self._hwnd, nil, 1)  -- drop any legacy region clip
+        if not Dwm then return end
         local rad = self._cornerRadius or 0
+        local pref = DWMWCP_ROUND
         if rad <= 0 then
-            U.SetWindowRgn(self._hwnd, nil, 1)  -- clear region -> square corners
-            return
+            pref = DWMWCP_DONOTROUND
+        elseif rad <= 5 then
+            pref = DWMWCP_ROUNDSMALL
         end
-        local pw, ph = logi(r.w), logi(r.h)
-        local prad = logi(rad) * 2  -- CreateRoundRectRgn wants the ellipse diameter
-        local rgn = G.CreateRoundRectRgn(0, 0, pw + 1, ph + 1, prad, prad)
-        if rgn ~= nil then
-            local ok = U.SetWindowRgn(self._hwnd, rgn, 1)
-            if ok == 0 then pcall(function() G.DeleteObject(rgn) end) end
-        end
+        local prefBuf = ffi.new("unsigned long[1]", pref)
+        pcall(function()
+            Dwm.DwmSetWindowAttribute(self._hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, prefBuf, 4)
+        end)
+        local colBuf = ffi.new("unsigned long[1]", DWMWA_COLOR_DEFAULT)
+        pcall(function()
+            Dwm.DwmSetWindowAttribute(self._hwnd, DWMWA_BORDER_COLOR, colBuf, 4)
+        end)
     end
 
     local function pushBounds(self)
@@ -599,7 +623,6 @@ webview.usercontent = usercontent
             self._controller.lpVtbl.put_Bounds(self._controller, rc)
         end
         U.MoveWindow(self._hwnd, logi(r.x), logi(r.y), pw, ph, 0)
-        applyCornerRegion(self)  -- region is extent-specific; rebuild for the new size
     end
 
     -- :frame([rect]) -- getter with no arg, setter with a rect. Returns rect (getter)
@@ -624,24 +647,20 @@ webview.usercontent = usercontent
     end
 
     -- :cornerRadius([r]) -- getter with no arg; setter with a LOGICAL-px radius. Rounds
-    -- the host window's corners to `r` via a window region so the radius tracks the theme
-    -- (windowRadius) instead of DWM's fixed ~8px. 0 restores square corners. This is a
-    -- Windows-only extension to the Hammerspoon API (a no-op-shaped method on mac, where
-    -- the shell rounds itself in CSS on a transparent WKWebView). Returns self (setter).
+    -- the host window's corners to the nearest DWM tier for `r` (0 square, ~4px small,
+    -- ~8px round) and requests the system's subtle border, so the frame reads smooth and
+    -- outlined like a native window instead of the aliased, borderless SetWindowRgn clip.
+    -- The exact theme radius snaps to a tier -- DWM offers no arbitrary radius, and its
+    -- per-pixel AA is worth more here than exact px. This is a Windows-only extension to
+    -- the Hammerspoon API (a no-op-shaped method on mac, where the shell rounds itself in
+    -- CSS on a transparent WKWebView). Returns self (setter).
     function Webview:cornerRadius(r)
         if r == nil then return self._cornerRadius or 0 end
         self._cornerRadius = math.max(0, tonumber(r) or 0)
-        -- Hand rounding authority to the region: DWM's fixed ~8px preference would
-        -- otherwise still round the frame (and re-round the corners even when the theme
-        -- asks for square, radius 0). Turn it off once we take over. Best-effort.
-        if Dwm and not self._dwmOff then
-            local pref = ffi.new("unsigned long[1]", DWMWCP_DONOTROUND)
-            pcall(function()
-                Dwm.DwmSetWindowAttribute(self._hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, pref, 4)
-            end)
-            self._dwmOff = true
-        end
-        if not self._deleted then applyCornerRegion(self) end
+        -- Glass mode: the page owns the corner (CSS border-radius on --ms-window-radius),
+        -- so there is nothing to clip or tier here. The DWM/region path stays for the
+        -- default layered window.
+        if not GLASS and not self._deleted then applyCornerRegion(self) end
         return self
     end
 
@@ -803,7 +822,13 @@ webview.usercontent = usercontent
         if n == nil then return self._alpha end
         if n < 0 then n = 0 elseif n > 1 then n = 1 end
         self._alpha = n
-        if not self._deleted then
+        if self._deleted then return self end
+        if GLASS then
+            -- No layered alpha in glass mode; fade the page itself. evaluateJavaScript
+            -- queues until the core is ready, so an early alpha(0) still lands.
+            self:evaluateJavaScript(
+                "document.documentElement.style.opacity='" .. tostring(n) .. "'")
+        else
             U.SetLayeredWindowAttributes(self._hwnd, 0, math.floor(n * 255 + 0.5), LWA_ALPHA)
         end
         return self
@@ -1119,7 +1144,11 @@ webview.usercontent = usercontent
 
         -- Extended style: layered + topmost + toolwindow, NOACTIVATE by default (text
         -- entry off until allowTextEntry(true)). Consumer flips it as needed.
-        local exStyle = bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
+        -- Glass mode drops EX_LAYERED: per-pixel alpha comes from the DWM glass frame
+        -- below, and LWA_ALPHA would flatten it. Fades switch to CSS opacity (see :alpha).
+        local exStyle = GLASS
+            and bit.bor(EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
+            or  bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
 
         local hwnd = U.CreateWindowExA(exStyle, classBuf, "", WS_POPUP,
                                        logi(r.x), logi(r.y), logi(r.w), logi(r.h),
@@ -1135,6 +1164,38 @@ webview.usercontent = usercontent
         -- Consumers set their alpha before showing (mudscript always fades in from 0);
         -- _alpha keeps the logical 1.0 default until then, and the window is hidden at
         -- birth, so the physical/logical gap is never visible.
+        if GLASS then
+            -- Sheet-of-glass client area: the page's transparent pixels show desktop with
+            -- per-pixel alpha. No layered alpha, no DWM corner tier -- the page rounds and
+            -- outlines itself. WM_ERASEBKGND already returns without filling, so the client
+            -- starts transparent.
+            local m = ffi.new("MARGINS", -1, -1, -1, -1)
+            if Dwm then
+                pcall(function() Dwm.DwmExtendFrameIntoClientArea(hwnd, m) end)
+            end
+            trace("new(): GLASS mode -- DwmExtendFrameIntoClientArea(-1) attempted")
+            local self = setmetatable({
+                _hwnd           = hwnd,
+                _rect           = r,
+                _prefs          = prefs or {},
+                _ucc            = usercontentController,
+                _navCallback    = nil,
+                _queue          = {},
+                _controller     = nil,
+                _core           = nil,
+                _visible        = false,
+                _deleted        = false,
+                _alpha          = 1.0,
+                _level          = 0,
+                _shadow         = false,
+                _transparent    = false,
+                _allowTextEntry = false,
+                _mask           = windowMasks.borderless,
+            }, Webview)
+            startBringUp(self)
+            return self
+        end
+
         U.SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA)
 
         -- Ask DWM to round the host corners (Win11). This smooths the corner in the
@@ -1147,7 +1208,11 @@ webview.usercontent = usercontent
             pcall(function()
                 Dwm.DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, pref, 4)
             end)
-            trace("new(): DwmSetWindowAttribute(CORNER_PREFERENCE=ROUND) attempted")
+            local col = ffi.new("unsigned long[1]", DWMWA_COLOR_DEFAULT)
+            pcall(function()
+                Dwm.DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, col, 4)
+            end)
+            trace("new(): DwmSetWindowAttribute(CORNER_PREFERENCE=ROUND, BORDER=DEFAULT) attempted")
         end
 
         local self = setmetatable({
