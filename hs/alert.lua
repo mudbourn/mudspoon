@@ -218,6 +218,7 @@ local alert = {}
             x = x, y = y, w = w, h = h,
             alpha = startAlpha,
             bg = s.bg, fg = s.fg,
+            font = s.textFont, size = s.textSize,
         })
 
         local entry = {

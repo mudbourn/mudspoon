@@ -55,6 +55,8 @@ HRGN    CreateRoundRectRgn(int, int, int, int, int, int);
 BOOL    DeleteObject(HGDIOBJ);
 int     SetBkMode(HDC, int);
 DWORD   SetTextColor(HDC, DWORD);
+HGDIOBJ CreateFontA(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, LPCSTR);
+HGDIOBJ SelectObject(HDC, HGDIOBJ);
 ]]
 -- END --
 
@@ -85,6 +87,11 @@ DWORD   SetTextColor(HDC, DWORD);
 
     local DEFAULT_BG    = 0x001C1F24     -- deepslate; COLORREF is 0x00BBGGRR
     local DEFAULT_FG    = 0x00E8E8E8
+
+    local FW_NORMAL         = 400
+    local DEFAULT_CHARSET   = 1
+    local CLEARTYPE_QUALITY = 5
+    local DEFAULT_SIZE      = 20
 
     local CLASS         = "HammerspoonAlert"
 -- END --
@@ -123,7 +130,20 @@ DWORD   SetTextColor(HDC, DWORD);
                 if rec and rec.text and #rec.text > 0 then
                     G.SetBkMode(hdc, TRANSPARENT)
                     G.SetTextColor(hdc, rec.fg or DEFAULT_FG)
+
+                    local hFont, oldFont
+                    local face = rec.font or "Segoe UI"
+                    hFont = G.CreateFontA(-(rec.size or DEFAULT_SIZE), 0, 0, 0,
+                        FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                        CLEARTYPE_QUALITY, 0, face)
+                    if hFont ~= nil then oldFont = G.SelectObject(hdc, hFont) end
+
                     U.DrawTextA(hdc, rec.text, #rec.text, rc, DT_FORMAT)
+
+                    if hFont ~= nil then
+                        if oldFont ~= nil then G.SelectObject(hdc, oldFont) end
+                        G.DeleteObject(hFont)
+                    end
                 end
 
                 U.EndPaint(hwnd, ps)
@@ -211,6 +231,8 @@ local window = {}
             text = text ~= nil and tostring(text) or "",
             bg   = opts.bg or DEFAULT_BG,
             fg   = opts.fg or DEFAULT_FG,
+            font = (type(opts.font) == "string" and #opts.font > 0) and opts.font or nil,
+            size = opts.size,
         }
 
         -- Rounded corners. SetWindowRgn takes ownership of the region on success,

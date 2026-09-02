@@ -64,6 +64,10 @@ UINT SendInput(UINT, INPUT*, int);
     local MOUSEEVENTF_RIGHTUP    = 0x0010
     local MOUSEEVENTF_MIDDLEDOWN = 0x0020
     local MOUSEEVENTF_MIDDLEUP   = 0x0040
+    local MOUSEEVENTF_XDOWN      = 0x0080
+    local MOUSEEVENTF_XUP        = 0x0100
+    local XBUTTON1               = 0x0001
+    local XBUTTON2               = 0x0002
     local MOUSEEVENTF_WHEEL      = 0x0800
     local MOUSEEVENTF_HWHEEL     = 0x1000
     local MOUSEEVENTF_ABSOLUTE   = 0x8000
@@ -239,8 +243,15 @@ UINT SendInput(UINT, INPUT*, int);
 
         elseif MOUSE_FLAGS[t] then
             maybeMove()
-            local f = MOUSE_FLAGS[t]
-            fills[#fills + 1] = function(s) fillMouse(s, f, 0, nil, nil, extra) end
+            local btn = tonumber(props.buttonNumber)
+            if (t == "otherMouseDown" or t == "otherMouseUp") and (btn == 3 or btn == 4) then
+                local xf  = (t == "otherMouseDown") and MOUSEEVENTF_XDOWN or MOUSEEVENTF_XUP
+                local xid = (btn == 3) and XBUTTON1 or XBUTTON2
+                fills[#fills + 1] = function(s) fillMouse(s, xf, xid, nil, nil, extra) end
+            else
+                local f = MOUSE_FLAGS[t]
+                fills[#fills + 1] = function(s) fillMouse(s, f, 0, nil, nil, extra) end
+            end
 
         elseif t == "mouseMoved" then
             maybeMove()

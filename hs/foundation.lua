@@ -109,6 +109,8 @@ DWORD   MsgWaitForMultipleObjects(DWORD, const HANDLE*, BOOL, DWORD, DWORD);
     local WM_RBUTTONUP   = 0x0205
     local WM_MBUTTONDOWN = 0x0207
     local WM_MBUTTONUP   = 0x0208
+    local WM_XBUTTONDOWN = 0x020B
+    local WM_XBUTTONUP   = 0x020C
     local WM_MOUSEWHEEL  = 0x020A
     local WM_MOUSEHWHEEL = 0x020E
 
@@ -344,14 +346,16 @@ local host = {
     -- mirroring hs, which reports one *Dragged type per move.
     local BTN_DOWN = { [WM_LBUTTONDOWN] = 0, [WM_RBUTTONDOWN] = 1, [WM_MBUTTONDOWN] = 2 }
     local BTN_UP   = { [WM_LBUTTONUP]   = 0, [WM_RBUTTONUP]   = 1, [WM_MBUTTONUP]   = 2 }
-    local DRAG_TYPE = { [0] = "leftMouseDragged", [1] = "rightMouseDragged", [2] = "otherMouseDragged" }
-    local btnHeld = { [0] = false, [1] = false, [2] = false }
+    local DRAG_TYPE = { [0] = "leftMouseDragged", [1] = "rightMouseDragged", [2] = "otherMouseDragged", [3] = "otherMouseDragged", [4] = "otherMouseDragged" }
+    local btnHeld = { [0] = false, [1] = false, [2] = false, [3] = false, [4] = false }
 
     -- The held button (lowest number = highest priority) driving a drag, or nil.
     local function dragButton()
         if btnHeld[0] then return 0 end
         if btnHeld[1] then return 1 end
         if btnHeld[2] then return 2 end
+        if btnHeld[3] then return 3 end
+        if btnHeld[4] then return 4 end
         return nil
     end
 
@@ -449,17 +453,26 @@ local host = {
             local swallow = false
             if nCode >= 0 then
                 local wp = tonumber(wParam)
+                local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
+                -- WM_MOUSEWHEEL packs the signed delta in the high word of mouseData;
+                -- WM_XBUTTON* packs the thumb-button id (XBUTTON1=1, XBUTTON2=2) there.
+                local hiword = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
                 -- Track button state before typing the event so a move that arrives
                 -- in the same held-button window is seen as a drag.
-                local dn = BTN_DOWN[wp]; if dn then btnHeld[dn] = true  end
-                local up = BTN_UP[wp];   if up then btnHeld[up] = false end
-                local m = MOUSE_TYPE[wp]
-                if m then
-                    local ms    = ffi.cast("MSLLHOOKSTRUCT*", lParam)
+                local evType, evButton
+                if wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP then
+                    evButton = 2 + bit.band(hiword, 0xFFFF)
+                    evType   = (wp == WM_XBUTTONDOWN) and "otherMouseDown" or "otherMouseUp"
+                    btnHeld[evButton] = (wp == WM_XBUTTONDOWN)
+                else
+                    local dn = BTN_DOWN[wp]; if dn then btnHeld[dn] = true  end
+                    local up = BTN_UP[wp];   if up then btnHeld[up] = false end
+                    local m = MOUSE_TYPE[wp]
+                    if m then evType, evButton = m[1], m[2] end
+                end
+                if evType then
                     local extra = tonumber(ms.dwExtraInfo)
-                    -- WM_MOUSEWHEEL packs the signed delta in the high word of mouseData.
-                    local wheel = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
-                    local evType, evButton = m[1], m[2]
+                    local wheel = hiword
                     -- A move with a button held is a drag, named by that button.
                     if wp == WM_MOUSEMOVE then
                         local db = dragButton()

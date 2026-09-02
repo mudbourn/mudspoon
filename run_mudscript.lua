@@ -574,6 +574,77 @@
     end
 -- END --
 
+-- Windows font install: make bundled/imported theme fonts visible to WebView2 + GDI --
+    -- mac/ drops theme fonts into a font dir and macOS registers them system-wide, so the
+    -- loading screen (WebView2) and alerts (GDI) resolve them by family name. On Windows
+    -- nothing scans that dir. Install every ui/fonts file per-user BEFORE the UI comes up:
+    -- copy into the LocalAppData font store, register in HKCU (persists, seen by DirectWrite
+    -- so WebView2 finds it), load into THIS process for GDI, and broadcast the change.
+    if package.config:sub(1, 1) == "\\" then
+        pcall(function()
+            local ffi = require("ffi")
+            local fs  = require("hs.fs")
+
+            local srcDir = hsDir .. "/ui/fonts"
+            if not fs.attributes(srcDir) then return end
+
+            local localApp = os.getenv("LOCALAPPDATA")
+            if not localApp or localApp == "" then return end
+            local dstDir = localApp:gsub("\\", "/") .. "/Microsoft/Windows/Fonts"
+
+            pcall(ffi.cdef, "int AddFontResourceA(const char*);")
+            pcall(ffi.cdef, "long SendMessageTimeoutA(void*, unsigned int, uintptr_t, uintptr_t, unsigned int, unsigned int, uintptr_t*);")
+
+            local gdi      = ffi.load("gdi32")
+            local user     = ffi.load("user32")
+            local realExec = _G.__mudspoon_realOsExecute or os.execute
+            local REG      = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+
+            local function copyFile(src, dst)
+                local fin = io.open(src, "rb")
+                if not fin then return false end
+                local data = fin:read("*all")
+                fin:close()
+                local fout = io.open(dst, "wb")
+                if not fout then return false end
+                fout:write(data)
+                fout:close()
+                return true
+            end
+
+            realExec('mkdir "' .. dstDir:gsub("/", "\\") .. '" >nul 2>nul')
+
+            local broadcast = false
+
+            for file in fs.dir(srcDir) do
+                local ext = file:match("%.([^%.]+)$")
+                ext = ext and ext:lower()
+                if ext == "ttf" or ext == "otf" then
+                    local dst    = dstDir .. "/" .. file
+                    local dstWin = dst:gsub("/", "\\")
+
+                    if not fs.attributes(dst) and copyFile(srcDir .. "/" .. file, dst) then
+                        local base  = file:gsub("%.[^%.]+$", "")
+                        local label = base .. (ext == "otf" and " (OpenType)" or " (TrueType)")
+                        realExec('reg add "' .. REG .. '" /v "' .. label
+                            .. '" /t REG_SZ /d "' .. dstWin .. '" /f >nul 2>nul')
+                        broadcast = true
+                    end
+
+                    if fs.attributes(dst) then gdi.AddFontResourceA(dstWin) end
+                end
+            end
+
+            if broadcast then
+                local WM_FONTCHANGE  = 0x001D
+                local HWND_BROADCAST = ffi.cast("void*", 0xFFFF)
+                local res = ffi.new("uintptr_t[1]")
+                user.SendMessageTimeoutA(HWND_BROADCAST, WM_FONTCHANGE, 0, 0, 0x0002, 1000, res)
+            end
+        end)
+    end
+-- END --
+
 -- Boot: run the entry file, then drive the runloop --
     io.stdout:write("[run_mudscript] booting mudscript from " .. hsDir .. "\n")
 
