@@ -474,10 +474,78 @@
     -- it cannot collide with any module's cdef. Falls back to 0 if the call fails.
     local realPID = 0
     pcall(function()
+        local ffi = require("ffi")
         ffi.cdef("unsigned long GetCurrentProcessId(void);")
         realPID = tonumber(ffi.load("kernel32").GetCurrentProcessId())
     end)
     hs.processInfo        = { bundleID = "org.hammerspoon.Hammerspoon", processID = realPID }
+-- END --
+
+-- Windows os.execute: service `kill [-N] <pid>` natively --
+    -- Lua's os.execute goes to cmd.exe on Windows, which has no `kill`, so mac/'s
+    -- single-instance eviction never terminated the duplicate. Match that shape and
+    -- terminate by Windows PID via TerminateProcess. Anything else passes through.
+    if package.config:sub(1, 1) == "\\" then
+        local ok, ffi = pcall(require, "ffi")
+        if ok then
+            pcall(ffi.cdef, "void* OpenProcess(unsigned long, int, unsigned long);")
+            pcall(ffi.cdef, "int CloseHandle(void*);")
+            pcall(ffi.cdef, "int TerminateProcess(void*, unsigned int);")
+
+            local K = ffi.load("kernel32")
+            local PROCESS_TERMINATE = 0x0001
+            local _osexecute = os.execute
+
+            os.execute = function(cmd)
+                if type(cmd) == "string" then
+                    local pid = cmd:match("^%s*kill%s+%-%d+%s+(%d+)")
+                        or cmd:match("^%s*kill%s+(%d+)")
+                    if pid then
+                        local h = K.OpenProcess(PROCESS_TERMINATE, 0, tonumber(pid))
+                        if h == nil then return 1 end
+                        local killed = K.TerminateProcess(h, 9)
+                        K.CloseHandle(h)
+                        return killed ~= 0 and 0 or 1
+                    end
+                end
+                return _osexecute(cmd)
+            end
+        end
+    end
+-- END --
+
+-- Windows hs.relaunch: quit this host and boot a fresh one through launch.ps1 --
+    -- Hammerspoon's hs.relaunch quits and reopens the app. The UI needs launch.ps1's
+    -- environment (WebView2 DLL path, MUDSPOON_WEBVIEW) to come up, so relaunch runs
+    -- through it. A detached PowerShell waits for THIS pid to exit, then boots a fresh
+    -- host. Waiting first keeps the single-instance guard from evicting the newcomer.
+    if package.config:sub(1, 1) == "\\" then
+        hs.relaunch = function()
+            local pid     = (hs.processInfo and hs.processInfo.processID) or 0
+            local mainDir = (arg[0] or "run_mudscript.lua"):gsub("[^/\\]*$", "")
+            local script  = hsDir .. "/data/.ms_relaunch.ps1"
+
+            local f = io.open(script, "w")
+            if f then
+                if pid > 0 then
+                    f:write("$p = " .. pid .. "\n")
+                    f:write("while (Get-Process -Id $p -ErrorAction SilentlyContinue) "
+                        .. "{ Start-Sleep -Milliseconds 150 }\n")
+                else
+                    f:write("Start-Sleep -Milliseconds 500\n")
+                end
+                f:write("& '" .. mainDir .. "launch.ps1' -SkipDeps\n")
+                f:close()
+
+                -- Real cmd os.execute: the override above routes os.execute through sh.
+                local realExec = _G.__mudspoon_realOsExecute or os.execute
+                realExec('start "" powershell -NoProfile -ExecutionPolicy Bypass '
+                    .. '-WindowStyle Hidden -File "' .. script .. '"')
+            end
+
+            os.exit(0)
+        end
+    end
 -- END --
 
 -- Smoke-test hook: run the cross-platform hs.* suite instead of booting mudscript --

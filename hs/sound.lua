@@ -122,6 +122,59 @@ local sound = {}
         return (self._task and self._task:isRunning()) or false
     end
 
+    -- :duration() -- length in seconds, or nil when it cannot be read --
+        -- NSSound reports this on macOS. mudscript reads it to hold the exit curtain
+        -- open for the shutdown and restart sounds. Only WAV is parsed here (the
+        -- sounds on that path are WAV): duration is the data chunk size over the fmt
+        -- chunk byte rate. Any non-WAV or malformed header returns nil, matching the
+        -- "unknown" contract the caller already guards for.
+        local function readU32LE(s, i)
+            local a, b, c, d = s:byte(i, i + 3)
+            if not d then return nil end
+            return a + b * 256 + c * 65536 + d * 16777216
+        end
+
+        function Sound:duration()
+            local f = io.open(self._path, "rb")
+            if not f then return nil end
+
+            local head = f:read(12)
+            if not head or #head < 12
+                or head:sub(1, 4) ~= "RIFF" or head:sub(9, 12) ~= "WAVE" then
+                f:close()
+                return nil
+            end
+
+            local byteRate = nil
+            local dataSize = nil
+
+            while true do
+                local ch = f:read(8)
+                if not ch or #ch < 8 then break end
+                local id   = ch:sub(1, 4)
+                local size = readU32LE(ch, 5)
+                if not size then break end
+
+                if id == "fmt " then
+                    local body = f:read(size)
+                    if body and #body >= 12 then byteRate = readU32LE(body, 9) end
+                elseif id == "data" then
+                    dataSize = size
+                    break
+                else
+                    f:seek("cur", size + (size % 2))
+                end
+            end
+
+            f:close()
+
+            if byteRate and byteRate > 0 and dataSize and dataSize > 0 then
+                return dataSize / byteRate
+            end
+            return nil
+        end
+    -- END --
+
     -- hs parity no-ops (mudscript sets these but they have no per-sound analogue here).
     function Sound:loopSound(_) return self end
     function Sound:device(_)    return self end

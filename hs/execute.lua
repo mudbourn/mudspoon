@@ -107,6 +107,192 @@
     end
 -- END --
 
+-- Native file-op fast path (Windows only) --
+    -- Runs the plain file operations mac/ shells out (mkdir, cp, rm, mv, a find
+    -- listing) in process. Only the exact command shapes mac/ emits are matched.
+    -- Anything else returns nil and takes the real shell.
+
+    -- argvOf: split into argv, honouring POSIX single quotes and the '\'' idiom
+    -- sq() produces. nil on an unbalanced quote.
+    local function argvOf(command)
+        local toks = {}
+        local cur  = {}
+        local has  = false
+        local i    = 1
+        local n    = #command
+
+        while i <= n do
+            local c = command:sub(i, i)
+
+            if c == "'" then
+                has = true
+                local j = command:find("'", i + 1, true)
+                if not j then return nil end
+                cur[#cur + 1] = command:sub(i + 1, j - 1)
+                i = j + 1
+            elseif c == "\\" then
+                has = true
+                cur[#cur + 1] = command:sub(i + 1, i + 1)
+                i = i + 2
+            elseif c == " " or c == "\t" then
+                if has then
+                    toks[#toks + 1] = table.concat(cur)
+                    cur = {}
+                    has = false
+                end
+                i = i + 1
+            else
+                has = true
+                cur[#cur + 1] = c
+                i = i + 1
+            end
+        end
+
+        if has then toks[#toks + 1] = table.concat(cur) end
+        return toks
+    end
+
+    local function argvIsPlain(argv)
+        for _, t in ipairs(argv) do
+            if t:find("[|&<>;$`*?]") then return false end
+        end
+        return true
+    end
+
+    local function nativeMkdirP(dir)
+        local fs = require("hs.fs")
+        local acc = nil
+
+        for part in dir:gsub("\\", "/"):gmatch("[^/]+") do
+            acc = acc and (acc .. "/" .. part) or part
+            if not (acc:match("^%a:$")) then
+                pcall(function() fs.mkdir(acc) end)
+            end
+        end
+
+        return true
+    end
+
+    local function nativeCopyFile(src, dest)
+        local fin = io.open(src, "rb")
+        if not fin then return false end
+
+        local fout = io.open(dest, "wb")
+        if not fout then
+            fin:close()
+            return false
+        end
+
+        while true do
+            local chunk = fin:read(1024 * 256)
+            if not chunk then break end
+            fout:write(chunk)
+        end
+
+        fin:close()
+        fout:close()
+        return true
+    end
+
+    local function nativeRemoveTree(path)
+        local fs = require("hs.fs")
+        local attr = fs.attributes(path)
+        if not attr then return true end
+
+        if attr.mode == "directory" then
+            local it, dobj = fs.dir(path)
+            local names = {}
+            for name in it do
+                if name ~= "." and name ~= ".." then names[#names + 1] = name end
+            end
+            if dobj then dobj:close() end
+
+            for _, name in ipairs(names) do
+                nativeRemoveTree(path .. "/" .. name)
+            end
+
+            pcall(function() fs.rmdir(path) end)
+            return true
+        end
+
+        os.remove(path)
+        return true
+    end
+
+    -- nativeFind: `find . -type f` as ./rel lines, dropping .DS_Store and, when
+    -- dropBak, *.bak.
+    local function nativeFind(baseDir, dropBak, out, prefix)
+        local fs = require("hs.fs")
+        local it, dobj = fs.dir(baseDir)
+        local names = {}
+        for name in it do
+            if name ~= "." and name ~= ".." then names[#names + 1] = name end
+        end
+        if dobj then dobj:close() end
+
+        for _, name in ipairs(names) do
+            local full = baseDir .. "/" .. name
+            local rel  = prefix .. name
+            local attr = fs.attributes(full)
+
+            if attr and attr.mode == "directory" then
+                nativeFind(full, dropBak, out, rel .. "/")
+            elseif attr then
+                local skip = (name == ".DS_Store") or (dropBak and name:match("%.bak$"))
+                if not skip then out[#out + 1] = "./" .. rel end
+            end
+        end
+
+        return out
+    end
+
+    -- nativeRun: returns (out, rc) on a matched shape, nil to fall back. rc is 0 on
+    -- success, 1 on a failed op, matching the shell's exit code.
+    local function nativeRun(command)
+        local ok, fs = pcall(require, "hs.fs")
+        if not ok or not fs then return nil end
+
+        if command:match("^/sbin/md5 ") then return "", 127 end
+
+        local quotedDir, mid = command:match(
+            "^cd (.-) && find %. %-type f ! %-name '%.DS_Store'(.-) 2>/dev/null$")
+        if quotedDir and (mid == "" or mid == " ! -name '*.bak'") then
+            local argv = argvOf(quotedDir)
+            if argv and argv[1] and not argv[2] then
+                local dropBak = mid ~= ""
+                local lines   = nativeFind(argv[1], dropBak, {}, "")
+                if #lines == 0 then return "", 0 end
+                return table.concat(lines, "\n") .. "\n", 0
+            end
+        end
+
+        local argv = argvOf(command)
+        if not argv or not argvIsPlain(argv) then return nil end
+        local a1, a2, a3, a4 = argv[1], argv[2], argv[3], argv[4]
+
+        if a1 == "mkdir" and a2 == "-p" and a3 and not a4 then
+            nativeMkdirP(a3)
+            return "", 0
+        end
+
+        if a1 == "/bin/cp" and a2 and a3 and not a4 then
+            return "", nativeCopyFile(a2, a3) and 0 or 1
+        end
+
+        if a1 == "/bin/rm" and (a2 == "-rf" or a2 == "-f") and a3 and not a4 then
+            nativeRemoveTree(a3)
+            return "", 0
+        end
+
+        if a1 == "/bin/mv" and a2 and a3 and not a4 then
+            if os.rename(a2, a3) then return "", 0 end
+            return nil
+        end
+
+        return nil
+    end
+-- END --
+
 -- execute --
     -- with_shell defaults to true (Hammerspoon default). When true we guarantee a
     -- POSIX shell + the exit-code marker; with_shell=false runs the raw string
@@ -114,6 +300,13 @@
     -- the documented escape hatch for callers that want the native shell verbatim.
     local function execute(command, with_shell)
         if with_shell == nil then with_shell = true end
+
+        if with_shell and IS_WINDOWS then
+            local out, rc = nativeRun(command)
+            if out ~= nil then
+                return out, (rc == 0) or nil, "exit", rc
+            end
+        end
 
         local out, ok
 
