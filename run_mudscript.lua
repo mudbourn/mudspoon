@@ -663,6 +663,27 @@
     io.stdout:write("[run_mudscript] init.lua loaded; entering runloop (Ctrl+C to quit).\n")
     io.stdout:flush()
 
+    -- Emergency-stop wiring: when foundation.panic fires (Ctrl+Alt+Pause), cancel every
+    -- running macro and stop its timers. foundation already releases held input.
+    do
+        local okh, host = pcall(require, "hs.foundation")
+        if okh and host and host.onPanic then
+            host.onPanic(function()
+                local ms = _G.ms
+                if type(ms) ~= "table" then return end
+                if ms.cancelMacros then pcall(ms.cancelMacros) end
+                if type(ms.running) == "table" then
+                    for _, timer in pairs(ms.running) do
+                        if type(timer) == "table" and timer.stop then
+                            pcall(function() timer:stop() end)
+                        end
+                    end
+                    ms.running = {}
+                end
+            end)
+        end
+    end
+
     -- Runloop heartbeat (diagnostic): logs once a second so the log shows whether the
     -- loop keeps ticking. If ticks CONTINUE past webview bring-up, the process is alive
     -- and any "no window" is a visibility/choreography issue; if ticks STOP at bring-up,

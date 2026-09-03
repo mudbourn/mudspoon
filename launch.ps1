@@ -16,12 +16,15 @@
     #     -Foreground   run in this console (see boot log live; Ctrl+C stops it)
     #     -NoWebview    boot without the webview UI (headless macro host only)
     #     -SkipDeps     skip the dependency preflight (fastest re-launch)
+    #     -NoGlass      host the webview on a plain layered window instead of the DWM
+    #                   glass frame (drops the page's own coloured outline and corners)
 # END #
 
 param(
     [switch]$Foreground,
     [switch]$NoWebview,
-    [switch]$SkipDeps
+    [switch]$SkipDeps,
+    [switch]$NoGlass
 )
 
 $ErrorActionPreference = "Stop"
@@ -169,6 +172,7 @@ $ErrorActionPreference = "Stop"
     # so LoadLibrary("WebView2Loader.dll") resolves without copying the DLL around.
     $env:Path = "$Root;$env:Path"
     if (-not $NoWebview) { $env:MUDSPOON_WEBVIEW = "1" }
+    if (-not $NoWebview -and -not $NoGlass) { $env:MUDSPOON_GLASS = "1" }
 
     $entry = Join-Path $Root "run_mudscript.lua"
     if (-not (Test-Path $entry)) { throw "run_mudscript.lua not found next to launch.ps1 ($entry)." }

@@ -5,132 +5,141 @@
     --   map[name] -> code   (name is a Hammerspoon key name, e.g. "return", "a", "f13")
     --   map[code] -> name    (canonical name for that code)
     --
-    -- IMPORTANT divergence from macOS Hammerspoon: the *codes* are Win32
-    -- virtual-key codes (VK_*), NOT macOS virtual keycodes. The *names* are kept
-    -- identical to Hammerspoon so scripts port unchanged, but the numbers are what
-    -- Thread B reports from the low-level hook (KBDLLHOOKSTRUCT.vkCode) and what
-    -- Thread C feeds to SendInput. Names are the portable surface; codes are the
-    -- Win32 wire value. Do not assume a code equals a macOS keycode.
+    -- The codes ARE macOS virtual keycodes, exactly as Hammerspoon reports them, so a
+    -- script that hardcodes mac keycodes (arrow 123, shift 56, ...) resolves the same
+    -- key it does on macOS. The Win32 virtual-key codes the low-level hook reports and
+    -- SendInput consumes are a separate wire value; macToVk / vkToMac translate at that
+    -- OS boundary (Thread B on read, Thread C on write). Names are the portable surface.
     --
     -- Leaf: no Foundation dependency, no FFI. Pure static table.
 -- END --
 
 local keycodes = {}
 
--- Forward table: name -> VK code --
-    -- One name may share a code with another (aliases). Reverse map below picks a
-    -- single canonical name per code from `canonical`.
-    local forward = {}
+-- Build tables from one master definition --
+    -- forward: name -> mac keycode. MAC_TO_VK / VK_TO_MAC: the OS-boundary translation.
+    -- First definition of a code wins the reverse direction, so primary names and the
+    -- canonical VK owner are declared before their aliases.
+    local forward   = {}
+    local MAC_TO_VK = {}
+    local VK_TO_MAC = {}
 
-    -- Letters a-z -> VK 0x41-0x5A --
+    local function def(name, mac, vk)
+        forward[name] = mac
+        if MAC_TO_VK[mac] == nil then MAC_TO_VK[mac] = vk end
+        if VK_TO_MAC[vk] == nil then VK_TO_MAC[vk] = mac end
+    end
+
+    -- Letters a-z (mac codes are not sequential) --
+        local LETTER_MAC = { 0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6 }
         for i = 0, 25 do
-            forward[string.char(97 + i)] = 0x41 + i
+            def(string.char(97 + i), LETTER_MAC[i + 1], 0x41 + i)
         end
     -- END --
 
-    -- Top-row digits 0-9 -> VK 0x30-0x39 --
+    -- Top-row digits 0-9 --
+        local DIGIT_MAC = { [0] = 29, [1] = 18, [2] = 19, [3] = 20, [4] = 21, [5] = 23, [6] = 22, [7] = 26, [8] = 28, [9] = 25 }
         for i = 0, 9 do
-            forward[tostring(i)] = 0x30 + i
+            def(tostring(i), DIGIT_MAC[i], 0x30 + i)
         end
     -- END --
 
-    -- Function keys f1-f24 -> VK 0x70-0x87 --
-        -- Hammerspoon exposes f1..f20; Windows has up to f24. We expose all 24.
-        for i = 1, 24 do
-            forward["f" .. i] = 0x70 + (i - 1)
+    -- Function keys f1-f20 --
+        local FKEY_MAC = { 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90 }
+        for i = 1, 20 do
+            def("f" .. i, FKEY_MAC[i], 0x70 + (i - 1))
         end
     -- END --
 
-    -- Numpad digits pad0-pad9 -> VK_NUMPAD0..9 (0x60-0x69) --
+    -- Numpad digits pad0-pad9 --
+        local PAD_MAC = { [0] = 82, [1] = 83, [2] = 84, [3] = 85, [4] = 86, [5] = 87, [6] = 88, [7] = 89, [8] = 91, [9] = 92 }
         for i = 0, 9 do
-            forward["pad" .. i] = 0x60 + i
+            def("pad" .. i, PAD_MAC[i], 0x60 + i)
         end
     -- END --
 
     -- Numpad operators --
-        forward["pad*"]     = 0x6A  -- VK_MULTIPLY
-        forward["pad+"]     = 0x6B  -- VK_ADD
-        forward["pad-"]     = 0x6D  -- VK_SUBTRACT
-        forward["pad."]     = 0x6E  -- VK_DECIMAL
-        forward["pad/"]     = 0x6F  -- VK_DIVIDE
-        forward["pad="]     = 0x92  -- VK_OEM_NEC_EQUAL (best-effort; rare on PC pads)
-        forward["padclear"] = 0x90  -- VK_NUMLOCK  (mac "clear" sits where NumLock is)
-        forward["padenter"] = 0x0D  -- VK_RETURN   (numpad Enter shares the code; distinguished only by the extended flag)
+        def("pad*", 67, 0x6A)
+        def("pad+", 69, 0x6B)
+        def("pad-", 78, 0x6D)
+        def("pad.", 65, 0x6E)
+        def("pad/", 75, 0x6F)
+        def("pad=", 81, 0x92)
+        def("padclear", 71, 0x90)
+        def("padenter", 76, 0x0D)
     -- END --
 
-    -- Named / editing keys --
-        forward["return"]        = 0x0D  -- VK_RETURN
-        forward["tab"]           = 0x09  -- VK_TAB
-        forward["space"]         = 0x20  -- VK_SPACE
-        forward["delete"]        = 0x08  -- VK_BACK   (Hammerspoon "delete" is Backspace)
-        forward["forwarddelete"] = 0x2E  -- VK_DELETE
-        forward["escape"]        = 0x1B  -- VK_ESCAPE
-        forward["help"]          = 0x2D  -- VK_INSERT (mac Help key sits where Insert is on a PC)
-        forward["home"]          = 0x24  -- VK_HOME
-        forward["end"]           = 0x23  -- VK_END
-        forward["pageup"]        = 0x21  -- VK_PRIOR
-        forward["pagedown"]      = 0x22  -- VK_NEXT
-        forward["left"]          = 0x25  -- VK_LEFT
-        forward["up"]            = 0x26  -- VK_UP
-        forward["right"]         = 0x27  -- VK_RIGHT
-        forward["down"]          = 0x28  -- VK_DOWN
+    -- Named / editing keys (return owns VK 0x0D over padenter, forced below) --
+        def("return", 36, 0x0D)
+        def("tab", 48, 0x09)
+        def("space", 49, 0x20)
+        def("delete", 51, 0x08)
+        def("forwarddelete", 117, 0x2E)
+        def("escape", 53, 0x1B)
+        def("help", 114, 0x2D)
+        def("home", 115, 0x24)
+        def("end", 119, 0x23)
+        def("pageup", 116, 0x21)
+        def("pagedown", 121, 0x22)
+        def("left", 123, 0x25)
+        def("up", 126, 0x26)
+        def("right", 124, 0x27)
+        def("down", 125, 0x28)
     -- END --
 
-    -- Punctuation, named by the character Hammerspoon uses (OEM VKs) --
-        forward[";"]  = 0xBA  -- VK_OEM_1
-        forward["="]  = 0xBB  -- VK_OEM_PLUS
-        forward[","]  = 0xBC  -- VK_OEM_COMMA
-        forward["-"]  = 0xBD  -- VK_OEM_MINUS
-        forward["."]  = 0xBE  -- VK_OEM_PERIOD
-        forward["/"]  = 0xBF  -- VK_OEM_2
-        forward["`"]  = 0xC0  -- VK_OEM_3
-        forward["["]  = 0xDB  -- VK_OEM_4
-        forward["\\"] = 0xDC  -- VK_OEM_5
-        forward["]"]  = 0xDD  -- VK_OEM_6
-        forward["'"]  = 0xDE  -- VK_OEM_7
+    -- Punctuation, named by the character Hammerspoon uses --
+        def(";", 41, 0xBA)
+        def("=", 24, 0xBB)
+        def(",", 43, 0xBC)
+        def("-", 27, 0xBD)
+        def(".", 47, 0xBE)
+        def("/", 44, 0xBF)
+        def("`", 50, 0xC0)
+        def("[", 33, 0xDB)
+        def("\\", 42, 0xDC)
+        def("]", 30, 0xDD)
+        def("'", 39, 0xDE)
     -- END --
 
-    -- Modifiers and locks --
-        -- Hammerspoon's "cmd" is the Windows key here (the closest ergonomic analog).
-        -- Left/right variants use the side-specific VKs so hotkey chord matching in
-        -- Thread F can tell them apart; the bare name uses the side-specific left VK
-        -- (GetAsyncKeyState on the generic VK also reads true, but SendInput wants a
-        -- concrete key, so we pin to left).
-        forward["cmd"]        = 0x5B  -- VK_LWIN
-        forward["rightcmd"]   = 0x5C  -- VK_RWIN
-        forward["alt"]        = 0xA4  -- VK_LMENU
-        forward["option"]     = 0xA4  -- alias of alt
-        forward["rightalt"]   = 0xA5  -- VK_RMENU
-        forward["rightoption"]= 0xA5  -- alias of rightalt
-        forward["shift"]      = 0xA0  -- VK_LSHIFT
-        forward["rightshift"] = 0xA1  -- VK_RSHIFT
-        forward["ctrl"]       = 0xA2  -- VK_LCONTROL
-        forward["rightctrl"]  = 0xA3  -- VK_RCONTROL
-        forward["capslock"]   = 0x14  -- VK_CAPITAL
+    -- Modifiers and locks (cmd aliases the Windows key; sides use the specific VKs) --
+        def("cmd", 55, 0x5B)
+        def("rightcmd", 54, 0x5C)
+        def("alt", 58, 0xA4)
+        def("option", 58, 0xA4)
+        def("rightalt", 61, 0xA5)
+        def("rightoption", 61, 0xA5)
+        def("shift", 56, 0xA0)
+        def("rightshift", 60, 0xA1)
+        def("ctrl", 59, 0xA2)
+        def("rightctrl", 62, 0xA3)
+        def("capslock", 57, 0x14)
+    -- END --
 
-        -- Windows-friendly aliases that have no Hammerspoon name. Harmless additions
-        -- on the forward side; never chosen as a canonical reverse name below.
-        forward["insert"]      = 0x2D  -- VK_INSERT
-        forward["numlock"]     = 0x90  -- VK_NUMLOCK
-        forward["scrolllock"]  = 0x91  -- VK_SCROLL
-        forward["pause"]       = 0x13  -- VK_PAUSE
-        forward["printscreen"] = 0x2C  -- VK_SNAPSHOT
+    -- Windows-side aliases sharing a physical key with a mac name above --
+        def("insert", 114, 0x2D)
+        def("numlock", 71, 0x90)
+    -- END --
 
-        -- "fn" has no Win32 virtual-key code (handled below the OS on most laptops),
-        -- so it is intentionally absent. hotkey/eventtap must not rely on it here.
+    -- Reverse-direction overrides at the OS boundary --
+        -- VK_RETURN is the numpad Enter and the main Return; the main key wins. The
+        -- generic modifier VKs (the hook can deliver these instead of the sided ones)
+        -- resolve to the left-side mac code.
+        VK_TO_MAC[0x0D] = 36
+        VK_TO_MAC[0x10] = 56
+        VK_TO_MAC[0x11] = 59
+        VK_TO_MAC[0x12] = 58
     -- END --
 -- END --
 
 -- Canonical names for the reverse map --
-    -- When several names share a code, the reverse map[code] resolves to the name
-    -- Hammerspoon scripts expect. Anything not listed here contributes its forward
-    -- name to the reverse map only if no canonical claims that code first.
+    -- When several names share a mac code, map[code] resolves to the name Hammerspoon
+    -- scripts expect. Anything unlisted contributes its own name if no canonical claims
+    -- the code first.
     local canonical = {
-        [0x0D] = "return",   -- not "padenter"
-        [0xA4] = "alt",      -- not "option"
-        [0xA5] = "rightalt", -- not "rightoption"
-        [0x2D] = "help",     -- not "insert"
-        [0x90] = "padclear", -- not "numlock"
+        [58]  = "alt",
+        [61]  = "rightalt",
+        [114] = "help",
+        [71]  = "padclear",
     }
 -- END --
 
@@ -144,7 +153,6 @@ local keycodes = {}
     -- END --
 
     -- Codes second (reverse direction), canonical winning ties. --
-        -- Seed canonical picks so an arbitrary pairs() order can't overwrite them.
         for code, name in pairs(canonical) do
             map[code] = name
         end
@@ -159,6 +167,19 @@ local keycodes = {}
     keycodes.map = map
 -- END --
 
+-- OS-boundary translation --
+    -- macToVk: hs keyCode (mac) -> Win32 VK for SendInput. vkToMac: hook VK -> mac
+    -- keyCode for the event surface. Both fall through to the input unchanged so an
+    -- unknown code degrades to a best-effort pass rather than a nil crash.
+    function keycodes.macToVk(code)
+        return MAC_TO_VK[code] or code
+    end
+
+    function keycodes.vkToMac(vk)
+        return VK_TO_MAC[vk] or vk
+    end
+-- END --
+
 -- Compatibility stubs --
     -- Thread D owns only the static table. These exist so `require`rs that probe the
     -- fuller Hammerspoon surface don't nil-crash. Layout switching is a no-op on the
@@ -171,8 +192,6 @@ local keycodes = {}
         return "com.apple.keylayout.US"
     end
 
-    -- Hammerspoon's hs.keycodes.map is also callable-ish in some code via these
-    -- helpers; provide the direct lookups against our frozen table.
     function keycodes.keyCodeForName(name)
         return map[name]
     end

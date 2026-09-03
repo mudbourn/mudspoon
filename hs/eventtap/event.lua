@@ -193,6 +193,15 @@ UINT SendInput(UINT, INPUT*, int);
         rightMouseDown = MOUSEEVENTF_RIGHTDOWN,  rightMouseUp = MOUSEEVENTF_RIGHTUP,
         otherMouseDown = MOUSEEVENTF_MIDDLEDOWN, otherMouseUp = MOUSEEVENTF_MIDDLEUP,
     }
+
+    -- Drag types carry a relative delta (mouseEventDeltaX/Y) rather than a button
+    -- transition; they inject a relative MOUSEEVENTF_MOVE. ms.cam drives these for
+    -- camera rotation, so the game reads raw pointer motion.
+    local DRAGGED = {
+        leftMouseDragged  = true,
+        rightMouseDragged = true,
+        otherMouseDragged = true,
+    }
 -- END --
 
 -- :post() -- the contract's post side, attached to the SHARED prototype --
@@ -222,8 +231,9 @@ UINT SendInput(UINT, INPUT*, int);
         end
 
         if t == "keyDown" or t == "keyUp" then
-            local vk = self._keyCode
-            if not vk then error("keyboard event has no keyCode", 2) end
+            local code = self._keyCode
+            if not code then error("keyboard event has no keyCode", 2) end
+            local vk = keycodes.macToVk(code)
             local up = (t == "keyUp")
 
             if not up then
@@ -243,14 +253,26 @@ UINT SendInput(UINT, INPUT*, int);
 
         elseif MOUSE_FLAGS[t] then
             maybeMove()
-            local btn = tonumber(props.buttonNumber)
-            if (t == "otherMouseDown" or t == "otherMouseUp") and (btn == 3 or btn == 4) then
-                local xf  = (t == "otherMouseDown") and MOUSEEVENTF_XDOWN or MOUSEEVENTF_XUP
-                local xid = (btn == 3) and XBUTTON1 or XBUTTON2
-                fills[#fills + 1] = function(s) fillMouse(s, xf, xid, nil, nil, extra) end
+            if t == "otherMouseDown" or t == "otherMouseUp" then
+                local btn = tonumber(props.buttonNumber) or 2
+                if btn == 3 or btn == 4 then
+                    local xf  = (t == "otherMouseDown") and MOUSEEVENTF_XDOWN or MOUSEEVENTF_XUP
+                    local xid = (btn == 3) and XBUTTON1 or XBUTTON2
+                    fills[#fills + 1] = function(s) fillMouse(s, xf, xid, nil, nil, extra) end
+                elseif btn == 2 then
+                    local f = MOUSE_FLAGS[t]
+                    fills[#fills + 1] = function(s) fillMouse(s, f, 0, nil, nil, extra) end
+                end
             else
                 local f = MOUSE_FLAGS[t]
                 fills[#fills + 1] = function(s) fillMouse(s, f, 0, nil, nil, extra) end
+            end
+
+        elseif DRAGGED[t] then
+            local dx = math.floor((tonumber(props.deltaX) or 0) + 0.5)
+            local dy = math.floor((tonumber(props.deltaY) or 0) + 0.5)
+            if dx ~= 0 or dy ~= 0 then
+                fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_MOVE, 0, dx, dy, extra) end
             end
 
         elseif t == "mouseMoved" then
@@ -268,7 +290,8 @@ UINT SendInput(UINT, INPUT*, int);
             end
 
         else
-            error("cannot post event of type '" .. tostring(t) .. "'", 2)
+            io.stderr:write("hammerspoon: cannot post event of type '" .. tostring(t) .. "' -- ignored\n")
+            return self
         end
 
         send(fills)
@@ -404,6 +427,34 @@ local event = {}
             flags = toFlagSet(mods),
             props = { scrollX = offsets[1] or 0, scrollY = offsets[2] or 0 },
         }
+    end
+-- END --
+
+-- Emergency input release (host.panic handler) --
+    -- foundation's panic hands us the keys/buttons its hooks believe are held; we
+    -- send the matching up transitions through SendInput so a wedged macro cannot
+    -- leave anything stuck down. Owns SendInput, so the release lives here.
+    if host.onPanic then
+        host.onPanic(function(snap)
+            local fills = {}
+            for _, vk in ipairs(snap.keys or {}) do
+                fills[#fills + 1] = function(s) fillKey(s, vk, true, MAGIC) end
+            end
+            for _, b in ipairs(snap.buttons or {}) do
+                if b == 0 then
+                    fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_LEFTUP,   0, nil, nil, MAGIC) end
+                elseif b == 1 then
+                    fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_RIGHTUP,  0, nil, nil, MAGIC) end
+                elseif b == 2 then
+                    fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_MIDDLEUP, 0, nil, nil, MAGIC) end
+                elseif b == 3 then
+                    fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_XUP, XBUTTON1, nil, nil, MAGIC) end
+                elseif b == 4 then
+                    fills[#fills + 1] = function(s) fillMouse(s, MOUSEEVENTF_XUP, XBUTTON2, nil, nil, MAGIC) end
+                end
+            end
+            send(fills)
+        end)
     end
 -- END --
 

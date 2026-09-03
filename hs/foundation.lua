@@ -137,6 +137,8 @@ DWORD   MsgWaitForMultipleObjects(DWORD, const HANDLE*, BOOL, DWORD, DWORD);
     local VK_MENU        = 0x12  -- Alt
     local VK_LWIN        = 0x5B
     local VK_RWIN        = 0x5C
+    local VK_CANCEL      = 0x03  -- Ctrl+Pause/Break
+    local VK_PAUSE       = 0x13
     local HIGH_BIT       = 0x8000
 
     -- vkCodes that carry no character of their own, only a modifier state. A key
@@ -383,6 +385,46 @@ local host = {
         return swallow
     end
 
+    -- Emergency stop. Ctrl+Alt+Pause (or Ctrl+Alt+Break) in the key hook calls this;
+    -- so can a consumer. It snapshots the keys/buttons the hooks think are held,
+    -- clears that state, and hands the snapshot to every registered handler so they
+    -- can release the synthetic input and cancel running work. Handlers run under
+    -- pcall so one bad handler cannot block the rest.
+    local panicSubs = {}
+
+    function host.onPanic(fn)
+        panicSubs[#panicSubs + 1] = fn
+        return function()
+            for i = #panicSubs, 1, -1 do
+                if panicSubs[i] == fn then table.remove(panicSubs, i) break end
+            end
+        end
+    end
+
+    function host.panic(reason)
+        local heldKeys = {}
+        for vk in pairs(keyHeld) do heldKeys[#heldKeys + 1] = vk end
+        local heldBtns = {}
+        for b = 0, 4 do if btnHeld[b] then heldBtns[#heldBtns + 1] = b end end
+        for vk in pairs(keyHeld) do keyHeld[vk] = nil end
+        for b = 0, 4 do btnHeld[b] = false end
+        local snap = {
+            keys    = heldKeys,
+            buttons = heldBtns,
+            reason  = reason,
+        }
+        for _, fn in ipairs(panicSubs) do pcall(fn, snap) end
+    end
+
+    -- The event surface reports macOS keycodes (hs parity); the hook reads Win32 VKs.
+    -- keycodes.vkToMac bridges them. A leaf module, so the require never cycles; it
+    -- falls back to identity if the map is not yet on package.path.
+    local vkToMac
+    do
+        local ok, kc = pcall(require, "hs.keycodes")
+        vkToMac = (ok and kc and kc.vkToMac) or function(vk) return vk end
+    end
+
     local function installKeyHook()
         -- Create the ffi callback ONCE and reuse it across every install/uninstall
         -- cycle. UnhookWindowsHookEx does not guarantee no further calls: the OS can
@@ -403,6 +445,12 @@ local host = {
                     local kb    = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
                     local extra = tonumber(kb.dwExtraInfo)
                     local vk    = tonumber(kb.vkCode)
+                    -- Emergency stop: Ctrl+Alt+Pause (or Ctrl+Alt+Break) releases held
+                    -- synthetic input and cancels running work, then passes through.
+                    if t == "keyDown" and (vk == VK_PAUSE or vk == VK_CANCEL)
+                        and down(VK_CONTROL) and down(VK_MENU) then
+                        pcall(host.panic, "hotkey")
+                    end
                     -- Autorepeat: a keyDown for a key already held (no keyUp since) is
                     -- a hardware repeat. Update held-state off the raw down/up type,
                     -- before t is possibly rewritten to flagsChanged below.
@@ -419,7 +467,7 @@ local host = {
                     if MODIFIER_VK[vk] then t = "flagsChanged" end
                     local ev = host.newEvent{
                         type    = t,
-                        keyCode = vk,
+                        keyCode = vkToMac(vk),
                         flags   = currentFlags(),
                         props   = {
                             scanCode   = tonumber(kb.scanCode),
@@ -469,6 +517,12 @@ local host = {
                     local up = BTN_UP[wp];   if up then btnHeld[up] = false end
                     local m = MOUSE_TYPE[wp]
                     if m then evType, evButton = m[1], m[2] end
+                end
+                if wp ~= WM_MOUSEMOVE and wp ~= WM_MOUSEWHEEL and wp ~= WM_MOUSEHWHEEL then
+                    io.stderr:write(string.format(
+                        "[mousediag] wp=0x%04X evType=%s evButton=%s hiword=%d\n",
+                        wp, tostring(evType), tostring(evButton), hiword))
+                    io.stderr:flush()
                 end
                 if evType then
                     local extra = tonumber(ms.dwExtraInfo)
