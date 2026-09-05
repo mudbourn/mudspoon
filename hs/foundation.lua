@@ -668,14 +668,35 @@ local host = {
     function host.run()
         if running then return end
         running = true
+        -- Watchdog heartbeat: an external monitor (launch.ps1) kills this host if the
+        -- file stops being touched, so a hung runloop can never freeze system input for
+        -- more than a few seconds. Writing after runTimers means a macro that hangs a
+        -- timer callback stops the heartbeat, which is exactly the case we must catch.
+        -- The idle wait is capped so the loop still ticks (and beats) on a quiet desktop.
+        local hbFile = os.getenv("MUDSPOON_HEARTBEAT_FILE")
+        local hbLast = 0
         while running do
             local to = nextTimeout()
+            if hbFile and (to == nil or to > 1000) then to = 1000 end
             U.MsgWaitForMultipleObjects(0, nil, false, to or INFINITE, QS_ALLINPUT)
             while U.PeekMessageA(msgBuf, nil, 0, 0, PM_REMOVE) ~= 0 do
                 U.TranslateMessage(msgBuf)
                 U.DispatchMessageA(msgBuf)
             end
             runTimers()
+            if hbFile then
+                local now = host.now()
+                if now - hbLast >= 1000 then
+                    hbLast = now
+                    pcall(function()
+                        local f = io.open(hbFile, "w")
+                        if f then
+                            f:write(tostring(now))
+                            f:close()
+                        end
+                    end)
+                end
+            end
         end
     end
     -- Keep the pump loop INTERPRETED. PeekMessageA/DispatchMessageA/MsgWaitForMultiple-

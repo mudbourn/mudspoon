@@ -189,9 +189,27 @@ $ErrorActionPreference = "Stop"
         # console window -- the closest Windows gets to the always-resident .app. The
         # low-level keyboard/mouse hooks pump on the host's own runloop, so no visible
         # window is needed. Diagnostics still tee to ..\.hammerspoon\hammerspoon.log.
-        Start-Process -FilePath $luajit -ArgumentList $entry `
-                      -WorkingDirectory $Root -WindowStyle Hidden
+        $hsData = Join-Path (Resolve-Path (Join-Path $Root "..")).Path ".hammerspoon\data"
+        $hbFile = Join-Path $hsData ".ms_heartbeat"
+        $env:MUDSPOON_HEARTBEAT_FILE = $hbFile
+
+        # Fresh heartbeat so the watchdog's staleness clock starts now, not from a stale run.
+        try { Set-Content -Path $hbFile -Value "start" -Encoding utf8 } catch {}
+
+        $hostProc = Start-Process -FilePath $luajit -ArgumentList $entry `
+                      -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+
+        # Watchdog: kills the host if its runloop stalls, so a hung macro can never hard-
+        # freeze system input for more than a few seconds.
+        $wd    = Join-Path $Root "watchdog.ps1"
+        $wdLog = Join-Path $hsData "watchdog.log"
+        Start-Process -FilePath "powershell" -WindowStyle Hidden -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $wd,
+            "-HostPid", $hostProc.Id, "-Heartbeat", $hbFile, "-LogFile", $wdLog
+        )
+
         Info "hammerspoon is running (windowless). Quit from its menubar, or run Stop-Mudspoon.cmd."
+        Info "watchdog armed -- frees input automatically if the host runloop ever stalls."
         $logDir = (Resolve-Path (Join-Path $Root "..")).Path
         Info "boot log: $logDir\.hammerspoon\hammerspoon.log"
     }
