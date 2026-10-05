@@ -19,6 +19,7 @@
 -- END --
 
 local ffi = require("ffi")
+local bit = require("bit")
 
 local host     = require("hs.foundation")
 local keycodes = require("hs.keycodes")
@@ -209,6 +210,57 @@ UINT MapVirtualKeyW(UINT, UINT);
     }
 -- END --
 
+-- Held-button check for mouse-up events --
+    local UP_BUTTON_VK = {
+        leftMouseUp  = 0x01,
+        rightMouseUp = 0x02,
+        otherMouseUp = 0x04,
+    }
+
+    local OTHER_BUTTON_VK = {
+        [2] = 0x04,
+        [3] = 0x05,
+        [4] = 0x06,
+    }
+
+    local DOWN_TO_UP = {
+        leftMouseDown  = "leftMouseUp",
+        rightMouseDown = "rightMouseUp",
+        otherMouseDown = "otherMouseUp",
+    }
+
+    local postedDown = {}
+
+    -- Virtual key of the button a mouse event targets, or nil
+    local function buttonVk(upType, buttonNumber)
+        if upType == "otherMouseUp" then return OTHER_BUTTON_VK[tonumber(buttonNumber) or 2] end
+
+        return UP_BUTTON_VK[upType]
+    end
+
+    -- Records a posted mouse-down so its matching up is never dropped
+    local function notePosted(t, buttonNumber)
+        local up = DOWN_TO_UP[t]
+        if up then
+            local vk = buttonVk(up, buttonNumber)
+            if vk then postedDown[vk] = true end
+        end
+    end
+
+    -- True when the button a mouse-up would release is down, physically or by our own post
+    local function buttonHeld(t, buttonNumber)
+        local vk = buttonVk(t, buttonNumber)
+        if not vk then return false end
+
+        if postedDown[vk] then
+            postedDown[vk] = nil
+            return true
+        end
+
+        return bit.band(U.GetAsyncKeyState(vk), 0x8000) ~= 0
+    end
+-- END --
+
 -- :post() -- the contract's post side, attached to the SHARED prototype --
     -- Injects self through SendInput. Dispatches on the event type category.
     local function post(self)
@@ -257,6 +309,10 @@ UINT MapVirtualKeyW(UINT, UINT);
             end
 
         elseif MOUSE_FLAGS[t] then
+            if UP_BUTTON_VK[t] and not buttonHeld(t, props.buttonNumber) then return self end
+
+            notePosted(t, props.buttonNumber)
+
             maybeMove()
             if t == "otherMouseDown" or t == "otherMouseUp" then
                 local btn = tonumber(props.buttonNumber) or 2
