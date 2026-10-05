@@ -122,6 +122,23 @@ int  GetSystemMetrics(int);
             }
         end
     -- END --
+
+    -- :snapshot([rect]) -> image of the screen, or of rect relative to the screen origin
+    function Screen:snapshot(rect)
+        local s = dpiscale.get()
+        local m = self.monitor
+        local rx = rect and rect.x or 0
+        local ry = rect and rect.y or 0
+        local rw = rect and rect.w or m.w
+        local rh = rect and rect.h or m.h
+
+        local px = math.floor((m.x + rx) * s + 0.5)
+        local py = math.floor((m.y + ry) * s + 0.5)
+        local pw = math.max(math.floor(rw * s + 0.5), 1)
+        local ph = math.max(math.floor(rh * s + 0.5), 1)
+
+        return require("hs.image")._captureScreen(px, py, pw, ph)
+    end
 -- END --
 
 -- Enumeration --

@@ -87,6 +87,21 @@ Win32 code and is intentionally absent — do not rely on it.
 - `fn` receives an event object. **Return `true` to swallow** — the OS never sees
   the event and later subscribers do not run.
 
+### Sync wait (an extension of contract 3)
+
+A module that must block the thread on an external process calls
+`host.beginSyncWait()` before it waits and `host.endSyncWait()` after (use
+`pcall` so the end always runs). `host.inSyncWait()` reports the state.
+
+- While a sync wait is active the hook procs run no subscriber. They keep the
+  held key and button state current and pass every event on with
+  `CallNextHookEx`. Timers do not fire.
+- The waiting code must keep servicing sent messages, for example
+  `MsgWaitForMultipleObjects` with `QS_SENDMESSAGE` followed by `PeekMessage`
+  with `PM_NOREMOVE | PM_QS_SENDMESSAGE`, in a `jit.off` function. Without that
+  the low level hooks time out and system input freezes.
+- `hs.execute` is the only caller today.
+
 ## Shared rules
 
 - **Keep FFI callbacks alive.** Any `ffi.cast(...)` used as a callback must be

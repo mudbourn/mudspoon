@@ -132,6 +132,7 @@
         local fallback = {
             TMPDIR = realGetenv("TMPDIR") or realGetenv("TEMP") or realGetenv("TMP")
                      or (homeDir .. "/tmp"),
+            USER = realGetenv("USERNAME"),
             -- If nothing was found, fall back to bare `sh` (works if it is on PATH).
             -- When even that is absent, mac/'s file ops / guardian hashing no-op; a
             -- ONE-TIME warning is emitted below rather than per-call cmd.exe spam.
@@ -332,7 +333,7 @@
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
         "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus",
-        "distributednotifications", "processInfo" }
+        "distributednotifications", "processInfo", "image" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)

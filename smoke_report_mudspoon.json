@@ -7,10 +7,10 @@
   "summary": {
     "error": 0,
     "fail": 0,
-    "pass": 81,
-    "skip": 5,
+    "pass": 90,
+    "skip": 1,
     "timeout": 0,
-    "total": 86
+    "total": 91
   },
   "tests": [
     {
@@ -446,28 +446,28 @@
       "status": "pass"
     },
     {
-      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
       "id": "webview.new",
       "kind": "contract",
       "module": "webview",
       "name": "new",
-      "status": "skip"
+      "observed": "function",
+      "status": "pass"
     },
     {
-      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
       "id": "webview.usercontent.new",
       "kind": "contract",
       "module": "webview",
       "name": "usercontent.new",
-      "status": "skip"
+      "observed": "function",
+      "status": "pass"
     },
     {
-      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
       "id": "webview.windowMasks",
       "kind": "contract",
       "module": "webview",
       "name": "windowMasks",
-      "status": "skip"
+      "observed": "table",
+      "status": "pass"
     },
     {
       "id": "configdir.exists",
@@ -558,6 +558,46 @@
       "module": "execute",
       "name": "echo",
       "observed": "smoketest_marker",
+      "status": "pass"
+    },
+    {
+      "id": "execute.status",
+      "kind": "behavior",
+      "module": "execute",
+      "name": "status",
+      "observed": 3,
+      "status": "pass"
+    },
+    {
+      "id": "execute.quoting",
+      "kind": "behavior",
+      "module": "execute",
+      "name": "quoting",
+      "observed": "a b\nc'd\n",
+      "status": "pass"
+    },
+    {
+      "id": "execute.sleep",
+      "kind": "behavior",
+      "module": "execute",
+      "name": "sleep",
+      "observed": true,
+      "status": "pass"
+    },
+    {
+      "id": "execute.hash-parity",
+      "kind": "behavior",
+      "module": "execute",
+      "name": "hash-parity",
+      "observed": "d36b43db4a23c8f4cb5ab3329ed44e059fc989ae94f452b6142f517557160845",
+      "status": "pass"
+    },
+    {
+      "id": "execute.base64-uname",
+      "kind": "behavior",
+      "module": "execute",
+      "name": "base64-uname",
+      "observed": "x86_64",
       "status": "pass"
     },
     {
@@ -652,14 +692,6 @@
       "status": "pass"
     },
     {
-      "detail": "hs.webview unavailable or stubbed",
-      "id": "webview.evaluateJavaScript-callback",
-      "kind": "behavior-async",
-      "module": "webview",
-      "name": "evaluateJavaScript-callback",
-      "status": "skip"
-    },
-    {
       "id": "ipc.load-shape",
       "kind": "behavior",
       "module": "ipc",
@@ -692,6 +724,15 @@
       "status": "pass"
     },
     {
+      "detail": "result=3 err=nil",
+      "id": "webview.evaluateJavaScript-callback",
+      "kind": "behavior-async",
+      "module": "webview",
+      "name": "evaluateJavaScript-callback",
+      "observed": 3,
+      "status": "pass"
+    },
+    {
       "detail": "userInfo not round-tripped",
       "id": "distributednotifications.roundtrip",
       "kind": "behavior-async",
@@ -709,5 +750,5 @@
       "status": "pass"
     }
   ],
-  "timestamp": "2026-10-05T07:38:49Z"
+  "timestamp": "2026-10-05T08:01:56Z"
 }

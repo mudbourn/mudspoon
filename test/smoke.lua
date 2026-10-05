@@ -272,6 +272,127 @@ test("execute", "echo", "behavior", function()
     return out
 end)
 
+-- execute: exit codes, stdout capture and the status triple.
+test("execute", "status", "behavior", function()
+    local out, ok, typ, rc = hs.execute("echo a; (exit 3)")
+    need(out == "a\n", "stdout = " .. string.format("%q", tostring(out)))
+    need(ok == nil, "status for exit 3 = " .. tostring(ok) .. ", want nil")
+    need(typ == "exit", "type = " .. tostring(typ))
+    need(rc == 3, "rc = " .. tostring(rc) .. ", want 3")
+
+    local out2, ok2, typ2, rc2 = hs.execute("true")
+    need(out2 == "" and ok2 == true and typ2 == "exit" and rc2 == 0,
+        "true gave " .. string.format("%q", tostring(out2)) .. "," .. tostring(ok2) .. "," .. tostring(rc2))
+
+    local out3 = hs.execute("echo oops 1>&2; echo fine")
+    need(out3 == "fine\n", "stderr leaked into stdout: " .. string.format("%q", tostring(out3)))
+    return rc
+end)
+
+-- execute: a quoted path and multi-line output survive the shell.
+test("execute", "quoting", "behavior", function()
+    local out = hs.execute("printf 'a b\\nc'\\''d\\n'")
+    need(out == "a b\nc'd\n", "got " .. string.format("%q", tostring(out)))
+    return out
+end)
+
+-- execute: a command that blocks for a while still returns its output.
+test("execute", "sleep", "behavior", function()
+    local out = hs.execute("sleep 1; echo done")
+    need(out == "done\n", "got " .. string.format("%q", tostring(out)))
+    return true
+end)
+
+-- execute: native hashing matches the shell for files and trees.
+test("execute", "hash-parity", "behavior", function()
+    local base = tmpBase():gsub("\\", "/") .. "/mudspoon_hash_" .. tostring(os.time()) .. "_" .. tostring(math.random(1e6))
+    local function put(rel, body)
+        local full = base .. "/" .. rel
+        hs.execute("mkdir -p '" .. full:match("^(.*)/[^/]*$") .. "'")
+        local fh = io.open(full, "wb")
+        need(fh ~= nil, "could not write " .. full)
+        fh:write(body)
+        fh:close()
+    end
+
+    put("abc.txt", "abc")
+    put("empty.bin", "")
+    put("crlf.txt", "a\r\nb\r\n")
+    put("sp ace/f g.txt", "spaces")
+    put("sub/deep/z.txt", "deep")
+    put("sub/Z.txt", "upper")
+    put("sub/a.b", "dot")
+    put("sub/a/b", "slash")
+    put("dollar$x.txt", "dollar")
+    put(".DS_Store", "junk")
+    put("sub/._res", "junk")
+    put("__MACOSX/m.txt", "junk")
+
+    local function hashOf(out)
+        return tostring(out or ""):match("^(%x+)")
+    end
+
+    local vec = hashOf(hs.execute("sha256sum '" .. base .. "/abc.txt' 2>/dev/null"))
+    need(vec == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "abc vector = " .. tostring(vec))
+
+    local files = { "abc.txt", "empty.bin", "crlf.txt", "sp ace/f g.txt", "dollar$x.txt", "missing.txt" }
+    for _, f in ipairs(files) do
+        local cmd = "sha256sum '" .. base .. "/" .. f .. "' 2>/dev/null"
+        local a, sa, _, ra = hs.execute(cmd)
+        local b, sb, _, rb = hs.execute(cmd .. " ")
+        need(a == b and sa == sb and ra == rb, ("file hash differs for %s: native %q %s %s, shell %q %s %s"):format(
+            f,
+            tostring(a),
+            tostring(sa),
+            tostring(ra),
+            tostring(b),
+            tostring(sb),
+            tostring(rb)))
+    end
+
+    local tool = "sha256sum"
+    local treeCmd = "cd '" .. base .. "' && find . -type f ! -name '.DS_Store' ! -name '._*' "
+        .. "! -path './__MACOSX/*' -exec " .. tool .. " {} + 2>/dev/null | LC_ALL=C sort -k2 | " .. tool
+    local a, sa, _, ra = hs.execute(treeCmd)
+    local b, sb, _, rb = hs.execute(treeCmd .. " ")
+    need(a == b and sa == sb and ra == rb,
+        "tree hash differs: " .. string.format("%q", tostring(a)) .. " vs " .. string.format("%q", tostring(b)))
+    need(hashOf(a) ~= nil and #hashOf(a) == 64, "tree hash not a sha256")
+
+    hs.execute("/bin/rm -rf '" .. base .. "'")
+    return hashOf(a)
+end)
+
+-- execute: native base64 decode matches the shell and uname answers.
+test("execute", "base64-uname", "behavior", function()
+    local base = tmpBase():gsub("\\", "/") .. "/mudspoon_b64_" .. tostring(os.time()) .. "_" .. tostring(math.random(1e6))
+    local function read(p)
+        local fh = io.open(p, "rb")
+        if not fh then return nil end
+        local s = fh:read("*a")
+        fh:close()
+        return s
+    end
+
+    local fh = io.open(base .. ".in", "wb")
+    need(fh ~= nil, "could not write input")
+    fh:write("SGVsbG8gd29ybGQh\n")
+    fh:close()
+
+    local cmd = "openssl base64 -d -A -in '" .. base .. ".in' -out '" .. base .. ".out' 2>/dev/null"
+    local _, _, _, rc = hs.execute(cmd)
+    local got = read(base .. ".out")
+    os.remove(base .. ".in")
+    os.remove(base .. ".out")
+    if rc ~= 0 then skip("openssl unavailable (rc " .. tostring(rc) .. ")") end
+    need(got == "Hello world!", "decoded " .. string.format("%q", tostring(got)))
+
+    local arch = tostring(hs.execute("/usr/bin/uname -m 2>/dev/null") or ""):gsub("%s+", "")
+    need(arch ~= "", "uname -m empty")
+    return arch
+end)
+
 -- fs: stat + list a temp file we create, then remove it.
 test("fs", "stat-and-list", "behavior", function()
     local dir  = tmpBase()
@@ -414,7 +535,6 @@ end)
 
 -- timer actually fires.
 testAsync("timer", "doAfter-fires", function(done)
-    local t0 = os.clock()
     hs.timer.doAfter(0.05, function()
         done("pass", nil, "fired")
     end)

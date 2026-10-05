@@ -25,6 +25,7 @@
 -- END --
 
 local host = require("hs.foundation")
+local shims = require("hs.shims")
 local ffi  = host.ffi
 local bit  = host.bit
 local K    = host.C.kernel32
@@ -167,6 +168,46 @@ local task = {}
             return nil
         end
 
+        local exePath = self._path
+        local exeArgs = self._args
+        local base = exePath:match("[^/\\]+$")
+
+        if base == "open" and not io.open(exePath, "rb") then
+            local rc = shims.open(exeArgs)
+
+            self._running = true
+            self._handle = host.schedule(POLL_MS, function()
+                if self._handle then self._handle:cancel(); self._handle = nil end
+                self._running = false
+                if self._doneFn then
+                    local ok, err = pcall(self._doneFn, rc, "", "")
+                    if not ok then
+                        io.stderr:write("hs.task done callback error: " .. tostring(err) .. "\n")
+                    end
+                end
+            end, POLL_MS)
+
+            return self
+        end
+
+        if base == "zip" and not io.open(exePath, "rb") then
+            local tarPath, tarArgs = shims.zipTaskArgs(exeArgs)
+
+            if tarPath then
+                exePath = tarPath
+                exeArgs = tarArgs
+            end
+        end
+
+        if base == "osascript" and not io.open(exePath, "rb") then
+            local psPath, psArgs = shims.adminTaskArgs(exeArgs)
+
+            if psPath then
+                exePath = psPath
+                exeArgs = psArgs
+            end
+        end
+
         local stamp = tostring(os.time()) .. "_" .. tostring(math.random(1, 1e9))
         self._outPath = tempDir() .. "/hammerspoon_task_" .. stamp .. ".out"
         self._errPath = tempDir() .. "/hammerspoon_task_" .. stamp .. ".err"
@@ -191,8 +232,8 @@ local task = {}
         end
 
         -- Build the command line: quoted exe + quoted args.
-        local parts = { quoteArg(resolveExe(self._path)) }
-        for _, a in ipairs(self._args) do parts[#parts + 1] = quoteArg(a) end
+        local parts = { quoteArg(resolveExe(exePath)) }
+        for _, a in ipairs(exeArgs) do parts[#parts + 1] = quoteArg(a) end
         local cmdline = table.concat(parts, " ")
         -- CreateProcessA may modify lpCommandLine in place, so pass a writable copy.
         local cmdbuf = ffi.new("char[?]", #cmdline + 1)

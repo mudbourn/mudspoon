@@ -252,6 +252,40 @@ local host = {
         if down(VK_LWIN) or down(VK_RWIN) then f.cmd = true end
         return f
     end
+
+    -- Modifier flag set by each modifier vkCode
+    local MODIFIER_FLAG = {
+        [0x10] = "shift",
+        [0xA0] = "shift",
+        [0xA1] = "shift",
+        [0x11] = "ctrl",
+        [0xA2] = "ctrl",
+        [0xA3] = "ctrl",
+        [0x12] = "alt",
+        [0xA4] = "alt",
+        [0xA5] = "alt",
+        [0x5B] = "cmd",
+        [0x5C] = "cmd",
+    }
+
+    -- Flags for a key event from inside the hook, where async state still lags this transition
+    local function eventFlags(vk, isDown, held)
+        local f = currentFlags()
+
+        local flag = MODIFIER_FLAG[vk]
+
+        if not flag then return f end
+
+        local on = isDown
+
+        for other, name in pairs(MODIFIER_FLAG) do
+            if name == flag and held[other] then on = true end
+        end
+
+        f[flag] = on or nil
+
+        return f
+    end
 -- END --
 
 -- Scheduler Core (what hs.timer wraps) --
@@ -299,6 +333,8 @@ local host = {
     -- Fire everything due. Repeating timers reschedule off their own due time so
     -- cadence does not drift. Snapshot first: a fn may cancel or add timers.
     local function runTimers()
+        if host.inSyncWait() then return end
+
         local n, ready = host.now(), {}
         for h in pairs(timers) do
             if h.due <= n then ready[#ready + 1] = h end
@@ -372,6 +408,58 @@ local host = {
         [WM_MOUSEWHEEL]  = { "scrollWheel" },
         [WM_MOUSEHWHEEL] = { "scrollWheel" },
     }
+
+    -- Sync wait --
+        -- Count of synchronous waits in progress. While it is above zero the hook
+        -- procs run no subscriber and only keep held state current.
+        local syncWait = 0
+
+        -- Starts a synchronous wait. The caller blocks the thread but keeps servicing
+        -- sent messages, so the hooks stay responsive and pass every event through.
+        function host.beginSyncWait()
+            syncWait = syncWait + 1
+        end
+
+        -- Ends a synchronous wait started by host.beginSyncWait
+        function host.endSyncWait()
+            if syncWait > 0 then syncWait = syncWait - 1 end
+        end
+
+        -- True while a synchronous wait is in progress
+        function host.inSyncWait()
+            return syncWait > 0
+        end
+
+        -- Keeps held-key state current for an event that bypasses the subscribers
+        local function trackKey(nCode, wParam, lParam)
+            if nCode < 0 then return end
+
+            local t = KEY_TYPE[tonumber(wParam)]
+            if not t then return end
+
+            local vk = tonumber(ffi.cast("KBDLLHOOKSTRUCT*", lParam).vkCode)
+            keyHeld[vk] = (t == "keyDown") or nil
+        end
+
+        -- Keeps held-button state current for an event that bypasses the subscribers
+        local function trackMouse(nCode, wParam, lParam)
+            if nCode < 0 then return end
+
+            local wp = tonumber(wParam)
+            if wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP then
+                local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
+                local hiword = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
+                btnHeld[2 + bit.band(hiword, 0xFFFF)] = (wp == WM_XBUTTONDOWN)
+                return
+            end
+
+            local dn = BTN_DOWN[wp]
+            if dn then btnHeld[dn] = true end
+
+            local up = BTN_UP[wp]
+            if up then btnHeld[up] = false end
+        end
+    -- END --
 
     -- Fan out to subscribers; true from any of them means swallow.
     local function dispatch(subs, ev)
@@ -463,14 +551,15 @@ local host = {
                     elseif t == "keyUp" then
                         keyHeld[vk] = nil
                     end
-                    -- A modifier key transition is a flagsChanged, not keyDown/keyUp
-                    -- (hs contract). currentFlags() reads real-time async state, so
-                    -- by the time this fires the pressed/released bit is settled.
+                    local flags = eventFlags(vk, t == "keyDown", keyHeld)
+
+                    -- Modifier transition as flagsChanged
                     if MODIFIER_VK[vk] then t = "flagsChanged" end
+
                     local ev = host.newEvent{
                         type    = t,
                         keyCode = vkToMac(vk),
-                        flags   = currentFlags(),
+                        flags   = flags,
                         props   = {
                             scanCode   = tonumber(kb.scanCode),
                             injected   = bit.band(kb.flags, LLKHF_INJECTED) ~= 0,
@@ -485,6 +574,11 @@ local host = {
         end
         jit.off(keyBody, true)
         keyProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+            if syncWait > 0 then
+                pcall(trackKey, nCode, wParam, lParam)
+                return U.CallNextHookEx(nil, nCode, wParam, lParam)
+            end
+
             local ok, swallow = pcall(keyBody, nCode, wParam, lParam)
             if not ok then io.stderr:write("hammerspoon key hook error: " .. tostring(swallow) .. "\n") end
             if ok and swallow then return 1 end
@@ -548,6 +642,11 @@ local host = {
         end
         jit.off(mouseBody, true)
         mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+            if syncWait > 0 then
+                pcall(trackMouse, nCode, wParam, lParam)
+                return U.CallNextHookEx(nil, nCode, wParam, lParam)
+            end
+
             local ok, swallow = pcall(mouseBody, nCode, wParam, lParam)
             if not ok then io.stderr:write("hammerspoon mouse hook error: " .. tostring(swallow) .. "\n") end
             if ok and swallow then return 1 end
