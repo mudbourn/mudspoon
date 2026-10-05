@@ -332,7 +332,7 @@
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
         "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus",
-        "distributednotifications" }
+        "distributednotifications", "processInfo" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -386,7 +386,6 @@
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
     local STUB_MODULES = {
-        "processInfo",
         "chooser",
     }
 
@@ -410,6 +409,12 @@
         else
             hs[name] = stub
         end
+    end
+-- END --
+
+-- hs.ipc: the hs.cmd endpoint, started at boot only when MUDSPOON_IPC=1 --
+    if os.getenv("MUDSPOON_IPC") == "1" then
+        hs.ipc = require("hs.ipc")
     end
 -- END --
 
@@ -469,16 +474,6 @@
     hs.accessibilityState = function() return true end   -- Win32 has no AX gate
     hs.openConsole        = function() end                 -- no console window yet
     hs.loadSpoon          = function() return nil end      -- plugins not wired yet
-    -- processID: the real Win32 PID (mudscript reads hs.processInfo.processID).
-    -- GetCurrentProcessId returns DWORD; declared with a plain type, no typedef, so
-    -- it cannot collide with any module's cdef. Falls back to 0 if the call fails.
-    local realPID = 0
-    pcall(function()
-        local ffi = require("ffi")
-        ffi.cdef("unsigned long GetCurrentProcessId(void);")
-        realPID = tonumber(ffi.load("kernel32").GetCurrentProcessId())
-    end)
-    hs.processInfo        = { bundleID = "org.hammerspoon.Hammerspoon", processID = realPID }
 -- END --
 
 -- Windows os.execute: service `kill [-N] <pid>` natively --

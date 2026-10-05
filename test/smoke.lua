@@ -315,6 +315,39 @@ test("application", "frontmost-name", "behavior", function()
     return type(n) == "string" and "<string>" or "nil"
 end)
 
+-- processInfo: host identity fields have the right types.
+test("processInfo", "fields", "behavior", function()
+    local pi = hs.processInfo
+    needType(pi, "table", "hs.processInfo")
+    needType(pi.processID, "number", "processID")
+    needType(pi.bundleID, "string", "bundleID")
+    needType(pi.executablePath, "string", "executablePath")
+    need(pi.bundleID == "org.hammerspoon.Hammerspoon", "bundleID " .. tostring(pi.bundleID))
+    return "ok"
+end)
+
+-- application: runningApplications lists apps and each reports a kind.
+test("application", "running-applications", "behavior", function()
+    need(type(hs.application.runningApplications) == "function", "runningApplications missing")
+    local apps = hs.application.runningApplications()
+    needType(apps, "table", "runningApplications()")
+    need(#apps > 0, "no running applications")
+    local k = apps[1]:kind()
+    need(type(k) == "number", "kind() returned " .. type(k))
+    return "ok"
+end)
+
+-- uielement: watcher event constants exist.
+test("uielement", "watcher-constants", "behavior", function()
+    local w = hs.uielement.watcher
+    for _, n in ipairs({ "applicationActivated", "windowMoved", "windowResized",
+        "windowMinimized", "windowUnminimized", "windowCreated", "mainWindowChanged",
+        "focusedWindowChanged", "titleChanged", "elementDestroyed" }) do
+        need(w[n] ~= nil, "watcher." .. n .. " missing")
+    end
+    return "ok"
+end)
+
 -- screen: main screen reports a usable frame with numeric geometry.
 test("screen", "main-frame", "behavior", function()
     local scr = hs.screen.mainScreen()
@@ -438,6 +471,95 @@ testAsync("distributednotifications", "roundtrip", function(done)
         dn.post(noteName, "hs.smoke", { k = "v" })
     end)
 end, 3.0)
+
+-- webview: evaluateJavaScript delivers the decoded JS value to its callback
+testAsync("webview", "evaluateJavaScript-callback", function(done)
+    local wv = hs.webview
+    if type(wv) ~= "table" or tostring(wv):find("stub", 1, true) then
+        return done("skip", "hs.webview unavailable or stubbed")
+    end
+    local view = wv.new({ x = 0, y = 0, w = 100, h = 100 })
+    view:html("<html><body>smoke</body></html>")
+    view:evaluateJavaScript("1 + 2", function(result, err)
+        view:delete()
+        local ok = result == 3 and err == nil
+        done(ok and "pass" or "fail", ok and nil or ("result=" .. tostring(result) .. " err=" .. tostring(err)), result)
+    end)
+end, 10.0)
+
+-- ipc: the module loads and exposes a deletable default port
+test("ipc", "load-shape", "behavior", function()
+    if not IS_WINDOWS then return "mac-native" end
+    local ipc = require("hs.ipc")
+    need(type(ipc) == "table", "hs.ipc is not a table")
+    need(type(ipc.__default) == "table" and type(ipc.__default.delete) == "function", "no __default:delete")
+    need(type(ipc.cliInstall) == "function" and type(ipc.cliStatus) == "function", "cli functions missing")
+    ipc.__default:delete()
+    return "ok"
+end)
+
+-- ipc: a deleted and re-required module still answers a WM_COPYDATA command after garbage collection
+test("ipc", "reload-roundtrip", "behavior", function()
+    if not IS_WINDOWS then return "mac-native" end
+    local ffi = require("ffi")
+    local U = ffi.load("user32")
+    local K = ffi.load("kernel32")
+
+    require("hs.ipc").__default:delete()
+    package.loaded["hs.ipc"] = nil
+
+    local ipc = require("hs.ipc")
+
+    collectgarbage()
+    collectgarbage()
+
+    local got = nil
+
+    local function clientFn(hwnd, msg, wp, lp)
+        if msg == 0x004A then
+            local cds = ffi.cast("COPYDATASTRUCT*", lp)
+            got = ffi.string(cds.lpData, cds.cbData)
+            return 1
+        end
+        return U.DefWindowProcA(hwnd, msg, wp, lp)
+    end
+
+    local clientProc = ffi.cast("WNDPROC", clientFn)
+    local wc = ffi.new("WNDCLASSEXA")
+
+    wc.cbSize = ffi.sizeof("WNDCLASSEXA")
+    wc.lpfnWndProc = clientProc
+    wc.hInstance = K.GetModuleHandleA(nil)
+    wc.lpszClassName = "MudspoonSmokeIpcClient"
+
+    U.RegisterClassExA(wc)
+
+    local client = U.CreateWindowExA(0, "MudspoonSmokeIpcClient", "", 0, 0, 0, 0, 0, ffi.cast("HWND", -3), nil, wc.hInstance, nil)
+
+    need(client ~= nil, "client window not created")
+
+    local target = U.FindWindowExA(ffi.cast("HWND", -3), nil, "HammerspoonIpcPort", nil)
+
+    need(target ~= nil, "no ipc window after re-require")
+
+    local payload = tostring(tonumber(ffi.cast("uintptr_t", client))) .. "\n6 * 7"
+    local cds = ffi.new("COPYDATASTRUCT[1]")
+
+    cds[0].dwData = 0x4D534951
+    cds[0].cbData = #payload
+    cds[0].lpData = ffi.cast("void*", ffi.cast("const char*", payload))
+
+    local result = ffi.new("uintptr_t[1]")
+
+    U.SendMessageTimeoutA(target, 0x004A, ffi.cast("WPARAM", tonumber(ffi.cast("uintptr_t", client))), ffi.cast("LPARAM", cds), 2, 5000, result)
+    U.DestroyWindow(client)
+
+    need(got == "42\n", "unexpected ipc reply " .. tostring(got))
+
+    ipc.__default:delete()
+
+    return "ok"
+end)
 
 -- http (network-gated): a known raw URL returns HTTP 200 via async curl/NSURL.
 testAsync("http", "asyncGet-200", function(done)

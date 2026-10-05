@@ -39,6 +39,12 @@ BOOL   SetForegroundWindow(HWND);
 
 -- Constants --
     local PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+    local HOST_NAME = "Hammerspoon"
+
+    local HOST_BUNDLE_ID = "org.hammerspoon.Hammerspoon"
+
+    local hostPid = host.pid
 -- END --
 
 -- Process image path -> basename (best-effort; nil on failure) --
@@ -84,6 +90,7 @@ BOOL   SetForegroundWindow(HWND);
     -- names sans ".app"; the Windows analog is the exe name without ".exe"). mac/
     -- compares this against target names like "RobloxPlayerBeta", so strip the ext.
     function App:name()
+        if self._pid == hostPid then return HOST_NAME end
         if self._name == nil then
             -- imagePath can fail transiently (handle not yet openable early in a
             -- process's life, momentary access denial). Only cache a successful
@@ -107,6 +114,7 @@ BOOL   SetForegroundWindow(HWND);
     -- :bundleID() -> exe basename WITH extension, or nil. See header note: Windows
     -- has no bundle identifier; this is the closest stable per-app string.
     function App:bundleID()
+        if self._pid == hostPid then return HOST_BUNDLE_ID end
         return baseName(imagePath(self._pid))
     end
 
@@ -168,6 +176,12 @@ BOOL   SetForegroundWindow(HWND);
         return self
     end
 
+    -- Returns 1 when the app owns a visible window or is the host, else 0
+    function App:kind()
+        if self._pid == hostPid then return 1 end
+        return #self:allWindows() > 0 and 1 or 0
+    end
+
     -- :isRunning() -> true while the pid still resolves to a live image.
     function App:isRunning()
         return imagePath(self._pid) ~= nil
@@ -205,6 +219,9 @@ BOOL   SetForegroundWindow(HWND);
     -- windowless process won't be found by this slice.
     function application.get(hint)
         if hint == nil then return nil end
+        if hint == hostPid or (type(hint) == "string" and hint:lower() == HOST_NAME:lower()) then
+            return newApp(hostPid)
+        end
         if type(hint) == "number" then
             local app = newApp(hint)
             return app:isRunning() and app or nil
@@ -238,6 +255,24 @@ BOOL   SetForegroundWindow(HWND);
             end
         end
         return fuzzy
+    end
+
+    -- hs.application.runningApplications() -> apps owning top-level windows, plus the host
+    function application.runningApplications()
+        local out = { newApp(hostPid) }
+        local ok, win = pcall(require, "hs.window")
+        if not ok or type(win) ~= "table" or type(win._enumTopLevel) ~= "function" then
+            return out
+        end
+        local seen = { [hostPid] = true }
+        for _, hwnd in ipairs(win._enumTopLevel()) do
+            local pid = win._pidOf(hwnd)
+            if pid and not seen[pid] then
+                seen[pid] = true
+                out[#out + 1] = newApp(pid)
+            end
+        end
+        return out
     end
 
     -- hs.application.find(hint) -> alias of get for this slice (stock returns a list

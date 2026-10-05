@@ -7,10 +7,10 @@
   "summary": {
     "error": 0,
     "fail": 0,
-    "pass": 76,
-    "skip": 4,
+    "pass": 81,
+    "skip": 5,
     "timeout": 0,
-    "total": 80
+    "total": 86
   },
   "tests": [
     {
@@ -585,6 +585,30 @@
       "status": "pass"
     },
     {
+      "id": "processInfo.fields",
+      "kind": "behavior",
+      "module": "processInfo",
+      "name": "fields",
+      "observed": "ok",
+      "status": "pass"
+    },
+    {
+      "id": "application.running-applications",
+      "kind": "behavior",
+      "module": "application",
+      "name": "running-applications",
+      "observed": "ok",
+      "status": "pass"
+    },
+    {
+      "id": "uielement.watcher-constants",
+      "kind": "behavior",
+      "module": "uielement",
+      "name": "watcher-constants",
+      "observed": "ok",
+      "status": "pass"
+    },
+    {
       "id": "screen.main-frame",
       "kind": "behavior",
       "module": "screen",
@@ -628,6 +652,30 @@
       "status": "pass"
     },
     {
+      "detail": "hs.webview unavailable or stubbed",
+      "id": "webview.evaluateJavaScript-callback",
+      "kind": "behavior-async",
+      "module": "webview",
+      "name": "evaluateJavaScript-callback",
+      "status": "skip"
+    },
+    {
+      "id": "ipc.load-shape",
+      "kind": "behavior",
+      "module": "ipc",
+      "name": "load-shape",
+      "observed": "ok",
+      "status": "pass"
+    },
+    {
+      "id": "ipc.reload-roundtrip",
+      "kind": "behavior",
+      "module": "ipc",
+      "name": "reload-roundtrip",
+      "observed": "ok",
+      "status": "pass"
+    },
+    {
       "detail": "network tests off (set MUDSPOON_SMOKE_NET=1)",
       "id": "http.asyncGet-200",
       "kind": "behavior-async",
@@ -661,5 +709,5 @@
       "status": "pass"
     }
   ],
-  "timestamp": "2026-09-02T21:30:52Z"
+  "timestamp": "2026-10-05T07:25:15Z"
 }

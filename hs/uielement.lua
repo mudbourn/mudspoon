@@ -34,6 +34,20 @@ end
 -- handle Hammerspoon code references as hs.uielement.watcher; .new(element, fn, ud)
 -- mirrors the method form for callers that prefer the free-function style.
 uielement.watcher = {
+    applicationActivated = "AXApplicationActivated",
+    applicationDeactivated = "AXApplicationDeactivated",
+    applicationHidden = "AXApplicationHidden",
+    applicationShown = "AXApplicationShown",
+    mainWindowChanged = "AXMainWindowChanged",
+    focusedWindowChanged = "AXFocusedWindowChanged",
+    focusedElementChanged = "AXFocusedUIElementChanged",
+    windowCreated = "AXWindowCreated",
+    windowMoved = "AXWindowMoved",
+    windowResized = "AXWindowResized",
+    windowMinimized = "AXWindowMiniaturized",
+    windowUnminimized = "AXWindowDeminiaturized",
+    elementDestroyed = "AXUIElementDestroyed",
+    titleChanged = "AXTitleChanged",
     new = function(element, fn, userdata)
         if type(element) ~= "table" or type(element.newWatcher) ~= "function" then
             error("hs.uielement.watcher.new expects a uielement as the first argument", 2)

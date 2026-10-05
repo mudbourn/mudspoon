@@ -762,12 +762,76 @@ webview.usercontent = usercontent
         return self
     end
 
-    -- :evaluateJavaScript(js) -- fire-and-forget ExecuteScript (NULL completion
-    -- handler; the consumer never reads a result). Deferred until ready.
-    function Webview:evaluateJavaScript(js)
+    -- Pending ExecuteScript completions keyed by handler address
+    local execPending = {}
+
+    -- Completed handler objects held until a later tick so WebView2 can finish its Release call
+    local execRetired = {}
+
+    -- Drops the retired handler objects
+    local function clearRetired()
+        execRetired = {}
+    end
+
+    -- Shared vtable for every ExecuteScript completion handler
+    local execVt = ffi.new("EnvHandlerVtbl")
+
+    execVt.QueryInterface = qiCast
+
+    execVt.AddRef = addRefCast
+
+    execVt.Release = relCast
+
+    execVt.Invoke = keep(ffi.cast("HRESULT (__stdcall *)(void*, HRESULT, void*)",
+        function(this, hr, resultPtr)
+            local key = tonumber(ffi.cast("uintptr_t", this))
+            local entry = execPending[key]
+            execPending[key] = nil
+            if entry == nil then return S_OK end
+            execRetired[#execRetired + 1] = entry.obj
+            require("hs.timer").doAfter(1, clearRetired)
+            local result, err
+            if hr < 0 then
+                err = {
+                    NSLocalizedDescription = string.format("ExecuteScript failed (0x%08X)", bit.band(hr, 0xFFFFFFFF)),
+                    code = hr
+                }
+            elseif resultPtr ~= nil then
+                local text = fromWide(ffi.cast("LPCWSTR", resultPtr))
+                local ok, value = pcall(require("hs.json").decode, text)
+                if ok then result = value else result = text end
+            end
+            local cbOk, cbErr = pcall(entry.callback, result, err)
+            if not cbOk then
+                io.stderr:write("hs.webview: evaluateJavaScript callback error: " .. tostring(cbErr) .. "\n")
+            end
+            return S_OK
+        end))
+
+    keep(execVt)
+
+    -- Runs script in the page and calls callback(result, err) on the runloop with the decoded result
+    function Webview:evaluateJavaScript(js, callback)
         local w = toWide(js)
         whenReady(self, function()
-            self._core.lpVtbl.ExecuteScript(self._core, ffi.cast("LPCWSTR", w), nil)
+            local handler = nil
+            if type(callback) == "function" then
+                local obj = ffi.new("EnvHandler")
+                obj.lpVtbl = execVt
+                handler = ffi.cast("void*", obj)
+                execPending[tonumber(ffi.cast("uintptr_t", handler))] = { obj = obj, callback = callback }
+            end
+
+            local hr = self._core.lpVtbl.ExecuteScript(self._core, ffi.cast("LPCWSTR", w), handler)
+
+            if hr < 0 and handler ~= nil then
+                execPending[tonumber(ffi.cast("uintptr_t", handler))] = nil
+
+                pcall(callback, nil, {
+                    NSLocalizedDescription = string.format("ExecuteScript failed (0x%08X)", bit.band(hr, 0xFFFFFFFF)),
+                    code = hr
+                })
+            end
         end)
         return self
     end

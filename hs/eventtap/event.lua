@@ -47,6 +47,8 @@ typedef struct {
 } INPUT;
 
 UINT SendInput(UINT, INPUT*, int);
+
+UINT MapVirtualKeyW(UINT, UINT);
 ]]
 -- END --
 
@@ -56,6 +58,8 @@ UINT SendInput(UINT, INPUT*, int);
 
     local KEYEVENTF_KEYUP       = 0x0002
     local KEYEVENTF_EXTENDEDKEY = 0x0001
+    local KEYEVENTF_SCANCODE    = 0x0008
+    local MAPVK_VK_TO_VSC       = 0
 
     local MOUSEEVENTF_MOVE       = 0x0001
     local MOUSEEVENTF_LEFTDOWN   = 0x0002
@@ -125,16 +129,17 @@ UINT SendInput(UINT, INPUT*, int);
 -- END --
 
 -- INPUT builders --
-    -- Fill a keyboard INPUT slot in place. `extra` is the dwExtraInfo signature to
-    -- stamp -- MAGIC by default, or a caller-set eventSourceUserData (see :post()),
-    -- so a consumer's own sentinel round-trips back through the read hook.
+    -- Fill a keyboard INPUT slot in place with the vk and its hardware scancode
     local function fillKey(slot, vk, up, extra)
+        local scan = U.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+
         slot.type = INPUT_KEYBOARD
         local ki = slot.u.ki
         ki.wVk         = vk
-        ki.wScan       = 0
+        ki.wScan       = scan
         ki.dwFlags     = (up and KEYEVENTF_KEYUP or 0)
                        + (EXTENDED[vk] and KEYEVENTF_EXTENDEDKEY or 0)
+                       + (scan ~= 0 and KEYEVENTF_SCANCODE or 0)
         ki.time        = 0
         ki.dwExtraInfo = extra or MAGIC
     end

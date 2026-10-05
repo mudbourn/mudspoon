@@ -15,21 +15,19 @@
     -- callable in Hammerspoon). run_mudscript wires it via `hs.focus = require("hs.focus")`.
     --
     -- Depends on hs.foundation for shared TYPES + the loaded user32 only. It cdefs only
-    -- its own function prototypes. The three functions foundation/webview may also
-    -- declare (GetCurrentProcessId, SetForegroundWindow, BringWindowToTop) are spelled
+    -- its own function prototypes. The two functions foundation/webview may also
+    -- declare (SetForegroundWindow, BringWindowToTop) are spelled
     -- BYTE-IDENTICALLY here so LuaJIT accepts the redeclaration instead of erroring.
 -- END --
 
 local ffi = require("ffi")
 local host = require("hs.foundation")
 local U = (host.C and host.C.user32) or ffi.load("user32")
-local K = (host.C and host.C.kernel32) or ffi.load("kernel32")
 
 ffi.cdef[[
 typedef int (__stdcall *MS_WNDENUMPROC)(HWND, LPARAM);
 BOOL  EnumWindows(MS_WNDENUMPROC, LPARAM);
 DWORD GetWindowThreadProcessId(HWND, DWORD*);
-unsigned long GetCurrentProcessId(void);
 int   GetClassNameA(HWND, char*, int);
 BOOL  IsWindowVisible(HWND);
 BOOL  SetForegroundWindow(HWND);
@@ -39,7 +37,7 @@ BOOL  BringWindowToTop(HWND);
 -- Rank a class name: higher wins. 0 = not one of ours.
 local RANK = { HammerspoonWebView = 3, HammerspoonCanvas = 2, HammerspoonAlert = 1 }
 
-local ownPID  = K.GetCurrentProcessId()
+local ownPID  = host.pid
 local pidBuf  = ffi.new("DWORD[1]")
 local nameBuf = ffi.new("char[256]")
 

@@ -74,6 +74,7 @@ typedef struct {
 -- Foundation's own functions --
     ffi.cdef[[
 HMODULE GetModuleHandleA(LPCSTR);
+DWORD   GetCurrentProcessId(void);
 BOOL    QueryPerformanceCounter(LONGLONG*);
 BOOL    QueryPerformanceFrequency(LONGLONG*);
 
@@ -166,6 +167,7 @@ local host = {
     bit              = bit,
     C                = { user32 = U, kernel32 = K, gdi32 = G },
     moduleHandle     = K.GetModuleHandleA(nil),
+    pid              = tonumber(K.GetCurrentProcessId()),
     INJECTED_MAGIC   = INJECTED_MAGIC,
     -- WinEvent codes surfaced to onWinEvent subscribers (numbers), so window.filter /
     -- application.watcher can classify events without re-hardcoding the constants.
@@ -518,12 +520,6 @@ local host = {
                     local m = MOUSE_TYPE[wp]
                     if m then evType, evButton = m[1], m[2] end
                 end
-                if wp ~= WM_MOUSEMOVE and wp ~= WM_MOUSEWHEEL and wp ~= WM_MOUSEHWHEEL then
-                    io.stderr:write(string.format(
-                        "[mousediag] wp=0x%04X evType=%s evButton=%s hiword=%d\n",
-                        wp, tostring(evType), tostring(evButton), hiword))
-                    io.stderr:flush()
-                end
                 if evType then
                     local extra = tonumber(ms.dwExtraInfo)
                     local wheel = hiword
@@ -590,16 +586,7 @@ local host = {
         return subscribe(mouseSubs, installMouseHook, uninstallMouseHook, fn)
     end
 
-    -- WinEvent source: OS-level UI-object notifications (foreground change, window
-    -- create/destroy/show/hide, move/resize). Unlike the LL hooks these are NOT
-    -- swallowable -- SetWinEventHook is notify-only, so subscriber return values are
-    -- ignored. fn receives (event, hwnd, idObject, idChild), all numbers/HWND cdata.
-    --
-    -- OUTOFCONTEXT delivery means the OS posts these to OUR thread and the callback
-    -- runs while we pump messages (host.run) -- same thread as everything else, no
-    -- extra runloop, and (like the LL hooks) entered from the jit.off'd pump so the
-    -- JIT never enters the FFI callback ("bad callback" panic). SKIPOWNPROCESS keeps
-    -- our own webview/alert windows from generating self-noise.
+    -- WinEvent source, fn(event, hwnd, idObject, idChild)
     local winSubs  = {}
     local winProc                   -- WINEVENTPROC; created ONCE, kept for the process
                                     -- lifetime (a late in-flight call after UnhookWinEvent
@@ -636,7 +623,7 @@ local host = {
             -- in our own process, not an injected DLL). idProcess/idThread 0 = all.
             local flags = bit.bor(WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS)
             winHooks = {
-                U.SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nil, winProc, 0, 0, flags),
+                U.SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nil, winProc, 0, 0, WINEVENT_OUTOFCONTEXT),
                 U.SetWinEventHook(EVENT_OBJECT_CREATE,     EVENT_OBJECT_HIDE,       nil, winProc, 0, 0, flags),
                 U.SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nil, winProc, 0, 0, flags),
             }
