@@ -251,13 +251,23 @@ typedef struct ICoreWebView2ControllerVtbl {
 } ICoreWebView2ControllerVtbl;
 struct ICoreWebView2Controller { ICoreWebView2ControllerVtbl* lpVtbl; };
 
+/* ICoreWebView2Settings3: put_AreBrowserAcceleratorKeysEnabled is slot 24 */
+typedef struct ICoreWebView2SettingsVtbl {
+  HRESULT (__stdcall *QueryInterface)(void*, const void*, void**);
+  ULONG   (__stdcall *AddRef)(void*);
+  ULONG   (__stdcall *Release)(void*);
+  void* pad_slots[21];
+  HRESULT (__stdcall *put_AreBrowserAcceleratorKeysEnabled)(void*, BOOL);
+} ICoreWebView2SettingsVtbl;
+typedef struct ICoreWebView2Settings { ICoreWebView2SettingsVtbl* lpVtbl; } ICoreWebView2Settings;
+
 /* ICoreWebView2: Navigate(5), NavigateToString(6), ExecuteScript(27),
  * add_WebMessageReceived(32) are called; everything else is void* padding. */
 typedef struct ICoreWebView2Vtbl {
   HRESULT (__stdcall *QueryInterface)(ICoreWebView2*, void*, void**);
   ULONG   (__stdcall *AddRef)(ICoreWebView2*);
   ULONG   (__stdcall *Release)(ICoreWebView2*);
-  void* pad_get_Settings;                                                    /* 3 */
+  HRESULT (__stdcall *get_Settings)(ICoreWebView2*, ICoreWebView2Settings**); /* 3 */
   void* pad_get_Source;                                                      /* 4 */
   HRESULT (__stdcall *Navigate)(ICoreWebView2*, LPCWSTR);                    /* 5 */
   HRESULT (__stdcall *NavigateToString)(ICoreWebView2*, LPCWSTR);           /* 6 */
@@ -977,6 +987,36 @@ webview.usercontent = usercontent
     end
 -- END --
 
+-- Browser accelerator keys --
+    -- IID_ICoreWebView2Settings3 {fdb5ab74-af33-4854-84f0-0a631deb5eba}
+    local IID_SETTINGS3 = ffi.new("uint8_t[16]", {
+        0x74, 0xab, 0xb5, 0xfd,
+        0x33, 0xaf,
+        0x54, 0x48,
+        0x84, 0xf0, 0x0a, 0x63, 0x1d, 0xeb, 0x5e, 0xba,
+    })
+
+    -- Turns off the find bar, reload, print and browser zoom shortcuts
+    local function disableBrowserKeys(core)
+        local settingsPtr = ffi.new("ICoreWebView2Settings*[1]")
+
+        if core.lpVtbl.get_Settings(core, settingsPtr) ~= 0 or settingsPtr[0] == nil then return end
+
+        local settings = settingsPtr[0]
+        local s3Ptr = ffi.new("void*[1]")
+
+        if settings.lpVtbl.QueryInterface(settings, IID_SETTINGS3, s3Ptr) == 0 and s3Ptr[0] ~= nil then
+            local s3 = ffi.cast("ICoreWebView2Settings*", s3Ptr[0])
+
+            s3.lpVtbl.put_AreBrowserAcceleratorKeysEnabled(s3, 0)
+
+            s3.lpVtbl.Release(s3)
+        end
+
+        settings.lpVtbl.Release(settings)
+    end
+-- END --
+
 -- Async bring-up: env -> controller -> core, then flush the queue --
     -- Build the three per-view COM handler objects, kick off environment creation, and
     -- chain the completions. Each handler's struct+vtbl+Invoke cast is keep()'d.
@@ -1111,6 +1151,10 @@ webview.usercontent = usercontent
                         trace("ctrl Invoke: MINIMAL -- skipping add_WebMessageReceived/"
                               .. "put_Bounds/put_IsVisible/flush; controller left idle")
                         return
+                    end
+
+                    if self._core ~= nil then
+                        pcall(disableBrowserKeys, self._core)
                     end
 
                     -- Wire the page->Lua message stream (only if a controller was given).
