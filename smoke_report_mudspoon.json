@@ -1,0 +1,665 @@
+{
+  "host": "mudspoon",
+  "lua": "LuaJIT 2.1.1720049189",
+  "network": false,
+  "os": "windows",
+  "schema": 1,
+  "summary": {
+    "error": 0,
+    "fail": 0,
+    "pass": 76,
+    "skip": 4,
+    "timeout": 0,
+    "total": 80
+  },
+  "tests": [
+    {
+      "id": "timer.doAfter",
+      "kind": "contract",
+      "module": "timer",
+      "name": "doAfter",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "timer.doEvery",
+      "kind": "contract",
+      "module": "timer",
+      "name": "doEvery",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "timer.usleep",
+      "kind": "contract",
+      "module": "timer",
+      "name": "usleep",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "timer.secondsSinceEpoch",
+      "kind": "contract",
+      "module": "timer",
+      "name": "secondsSinceEpoch",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "timer.absoluteTime",
+      "kind": "contract",
+      "module": "timer",
+      "name": "absoluteTime",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "json.encode",
+      "kind": "contract",
+      "module": "json",
+      "name": "encode",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "json.decode",
+      "kind": "contract",
+      "module": "json",
+      "name": "decode",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "execute.exists",
+      "kind": "contract",
+      "module": "execute",
+      "name": "exists",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "fs.attributes",
+      "kind": "contract",
+      "module": "fs",
+      "name": "attributes",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "fs.dir",
+      "kind": "contract",
+      "module": "fs",
+      "name": "dir",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "fs.mkdir",
+      "kind": "contract",
+      "module": "fs",
+      "name": "mkdir",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "fs.rmdir",
+      "kind": "contract",
+      "module": "fs",
+      "name": "rmdir",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "mouse.absolutePosition",
+      "kind": "contract",
+      "module": "mouse",
+      "name": "absolutePosition",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "mouse.getCurrentScreen",
+      "kind": "contract",
+      "module": "mouse",
+      "name": "getCurrentScreen",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "screen.mainScreen",
+      "kind": "contract",
+      "module": "screen",
+      "name": "mainScreen",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "screen.allScreens",
+      "kind": "contract",
+      "module": "screen",
+      "name": "allScreens",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "keycodes.map",
+      "kind": "contract",
+      "module": "keycodes",
+      "name": "map",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "eventtap.new",
+      "kind": "contract",
+      "module": "eventtap",
+      "name": "new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "eventtap.event",
+      "kind": "contract",
+      "module": "eventtap",
+      "name": "event",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "eventtap.event.types",
+      "kind": "contract",
+      "module": "eventtap",
+      "name": "event.types",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "eventtap.event.properties",
+      "kind": "contract",
+      "module": "eventtap",
+      "name": "event.properties",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "eventtap.event.newKeyEvent",
+      "kind": "contract",
+      "module": "eventtap",
+      "name": "event.newKeyEvent",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "eventtap.event.newMouseEvent",
+      "kind": "contract",
+      "module": "eventtap",
+      "name": "event.newMouseEvent",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "application.get",
+      "kind": "contract",
+      "module": "application",
+      "name": "get",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "application.frontmostApplication",
+      "kind": "contract",
+      "module": "application",
+      "name": "frontmostApplication",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "application.watcher",
+      "kind": "contract",
+      "module": "application",
+      "name": "watcher",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "application.watcher.new",
+      "kind": "contract",
+      "module": "application",
+      "name": "watcher.new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "window.focusedWindow",
+      "kind": "contract",
+      "module": "window",
+      "name": "focusedWindow",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "window.find",
+      "kind": "contract",
+      "module": "window",
+      "name": "find",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "window.filter",
+      "kind": "contract",
+      "module": "window",
+      "name": "filter",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "window.filter.new",
+      "kind": "contract",
+      "module": "window",
+      "name": "filter.new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "uielement.watcher",
+      "kind": "contract",
+      "module": "uielement",
+      "name": "watcher",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "uielement.focusedElement",
+      "kind": "contract",
+      "module": "uielement",
+      "name": "focusedElement",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "axuielement.systemWideElement",
+      "kind": "contract",
+      "module": "axuielement",
+      "name": "systemWideElement",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "axuielement.systemElementAtPosition",
+      "kind": "contract",
+      "module": "axuielement",
+      "name": "systemElementAtPosition",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "http.asyncGet",
+      "kind": "contract",
+      "module": "http",
+      "name": "asyncGet",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "task.new",
+      "kind": "contract",
+      "module": "task",
+      "name": "new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "audiodevice.defaultOutputDevice",
+      "kind": "contract",
+      "module": "audiodevice",
+      "name": "defaultOutputDevice",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "audiodevice.findOutputByName",
+      "kind": "contract",
+      "module": "audiodevice",
+      "name": "findOutputByName",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "urlevent.openURL",
+      "kind": "contract",
+      "module": "urlevent",
+      "name": "openURL",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "sound.getByFile",
+      "kind": "contract",
+      "module": "sound",
+      "name": "getByFile",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "sound.getByName",
+      "kind": "contract",
+      "module": "sound",
+      "name": "getByName",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "pasteboard.setContents",
+      "kind": "contract",
+      "module": "pasteboard",
+      "name": "setContents",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "pasteboard.watcher",
+      "kind": "contract",
+      "module": "pasteboard",
+      "name": "watcher",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "distributednotifications.post",
+      "kind": "contract",
+      "module": "distributednotifications",
+      "name": "post",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "distributednotifications.new",
+      "kind": "contract",
+      "module": "distributednotifications",
+      "name": "new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "canvas.new",
+      "kind": "contract",
+      "module": "canvas",
+      "name": "new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "canvas.windowLevels",
+      "kind": "contract",
+      "module": "canvas",
+      "name": "windowLevels",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "canvas.windowBehaviors",
+      "kind": "contract",
+      "module": "canvas",
+      "name": "windowBehaviors",
+      "observed": "table",
+      "status": "pass"
+    },
+    {
+      "id": "menubar.new",
+      "kind": "contract",
+      "module": "menubar",
+      "name": "new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "notify.new",
+      "kind": "contract",
+      "module": "notify",
+      "name": "new",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "dialog.chooseFileOrFolder",
+      "kind": "contract",
+      "module": "dialog",
+      "name": "chooseFileOrFolder",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "dialog.blockAlert",
+      "kind": "contract",
+      "module": "dialog",
+      "name": "blockAlert",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "geometry.rect",
+      "kind": "contract",
+      "module": "geometry",
+      "name": "rect",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
+      "id": "webview.new",
+      "kind": "contract",
+      "module": "webview",
+      "name": "new",
+      "status": "skip"
+    },
+    {
+      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
+      "id": "webview.usercontent.new",
+      "kind": "contract",
+      "module": "webview",
+      "name": "usercontent.new",
+      "status": "skip"
+    },
+    {
+      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
+      "id": "webview.windowMasks",
+      "kind": "contract",
+      "module": "webview",
+      "name": "windowMasks",
+      "status": "skip"
+    },
+    {
+      "id": "configdir.exists",
+      "kind": "contract",
+      "module": "configdir",
+      "name": "exists",
+      "observed": "string",
+      "status": "pass"
+    },
+    {
+      "id": "processInfo.processID",
+      "kind": "contract",
+      "module": "processInfo",
+      "name": "processID",
+      "observed": "number",
+      "status": "pass"
+    },
+    {
+      "id": "reload.exists",
+      "kind": "contract",
+      "module": "reload",
+      "name": "exists",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "accessibilityState.exists",
+      "kind": "contract",
+      "module": "accessibilityState",
+      "name": "exists",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "openConsole.exists",
+      "kind": "contract",
+      "module": "openConsole",
+      "name": "exists",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "loadSpoon.exists",
+      "kind": "contract",
+      "module": "loadSpoon",
+      "name": "exists",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "focus.exists",
+      "kind": "contract",
+      "module": "focus",
+      "name": "exists",
+      "observed": "function",
+      "status": "pass"
+    },
+    {
+      "id": "json.roundtrip",
+      "kind": "behavior",
+      "module": "json",
+      "name": "roundtrip",
+      "observed": "{\"a\":1,\"b\":\"two\",\"c\":{\"d\":true,\"e\":[1,2,3]},\"n\":3688748}",
+      "status": "pass"
+    },
+    {
+      "id": "json.canonical-sorted",
+      "kind": "behavior",
+      "module": "json",
+      "name": "canonical-sorted",
+      "observed": "{\"a\":1,\"b\":2,\"n\":3688748,\"z\":{\"x\":2,\"y\":1}}",
+      "status": "pass"
+    },
+    {
+      "id": "geometry.center",
+      "kind": "behavior",
+      "module": "geometry",
+      "name": "center",
+      "observed": {
+        "x": 50,
+        "y": 25
+      },
+      "status": "pass"
+    },
+    {
+      "id": "execute.echo",
+      "kind": "behavior",
+      "module": "execute",
+      "name": "echo",
+      "observed": "smoketest_marker",
+      "status": "pass"
+    },
+    {
+      "id": "fs.stat-and-list",
+      "kind": "behavior",
+      "module": "fs",
+      "name": "stat-and-list",
+      "observed": 5,
+      "status": "pass"
+    },
+    {
+      "id": "pasteboard.roundtrip",
+      "kind": "behavior",
+      "module": "pasteboard",
+      "name": "roundtrip",
+      "observed": true,
+      "status": "pass"
+    },
+    {
+      "id": "application.frontmost-name",
+      "kind": "behavior",
+      "module": "application",
+      "name": "frontmost-name",
+      "observed": "<string>",
+      "status": "pass"
+    },
+    {
+      "id": "screen.main-frame",
+      "kind": "behavior",
+      "module": "screen",
+      "name": "main-frame",
+      "observed": {
+        "h": 1080,
+        "w": 1920
+      },
+      "status": "pass"
+    },
+    {
+      "id": "window.frame-shape",
+      "kind": "behavior",
+      "module": "window",
+      "name": "frame-shape",
+      "observed": true,
+      "status": "pass"
+    },
+    {
+      "id": "numfmt.dim-label",
+      "kind": "behavior",
+      "module": "numfmt",
+      "name": "dim-label",
+      "observed": "1280x720",
+      "status": "pass"
+    },
+    {
+      "id": "numfmt.settings-key",
+      "kind": "behavior",
+      "module": "numfmt",
+      "name": "settings-key",
+      "observed": "grid.cell.240",
+      "status": "pass"
+    },
+    {
+      "id": "audiodevice.default-output",
+      "kind": "behavior",
+      "module": "audiodevice",
+      "name": "default-output",
+      "observed": "<string>",
+      "status": "pass"
+    },
+    {
+      "detail": "network tests off (set MUDSPOON_SMOKE_NET=1)",
+      "id": "http.asyncGet-200",
+      "kind": "behavior-async",
+      "module": "http",
+      "name": "asyncGet-200",
+      "status": "skip"
+    },
+    {
+      "id": "timer.doAfter-fires",
+      "kind": "behavior-async",
+      "module": "timer",
+      "name": "doAfter-fires",
+      "observed": "fired",
+      "status": "pass"
+    },
+    {
+      "detail": "userInfo not round-tripped",
+      "id": "distributednotifications.roundtrip",
+      "kind": "behavior-async",
+      "module": "distributednotifications",
+      "name": "roundtrip",
+      "observed": "delivered",
+      "status": "pass"
+    },
+    {
+      "id": "pathwatcher.fires-on-change",
+      "kind": "behavior-async",
+      "module": "pathwatcher",
+      "name": "fires-on-change",
+      "observed": "notified",
+      "status": "pass"
+    }
+  ],
+  "timestamp": "2026-09-02T21:30:52Z"
+}
