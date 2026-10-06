@@ -129,9 +129,7 @@ begin
     'Hammerspoon for Windows is already installed.',
     'Repair reinstalls the app files and keeps your settings and macros. Uninstall removes the app.',
     mbConfirmation,
-    MB_YESNOCANCEL,
-    ['Repair', 'Uninstall'],
-    0);
+    MB_YESNOCANCEL, ['Repair', 'Uninstall'], 0);
 
   if Choice = IDNO then
   begin
