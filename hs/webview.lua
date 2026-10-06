@@ -57,8 +57,10 @@ local bit = require("bit")
     local hInst = host.moduleHandle
 -- END --
 
--- Submodule: the user-content controller (JS -> Lua callback holder). --
+-- Submodules --
     local usercontent = require("hs.webview.usercontent")
+
+    local fonts = require("hs.webview.fonts")
 -- END --
 
 -- DPI: consumers pass LOGICAL rects (mac-like points); the host window + WebView2
@@ -693,49 +695,39 @@ webview.usercontent = usercontent
         "})();</script>",
     })
 
-    -- Normalise a baseURL argument to a document base URL for <base href>. Hammerspoon's
-    -- :html(html, baseURL) sets the WKWebView base URL so a page's relative asset refs
-    -- (e.g. url("./fonts/x.ttf")) resolve against it. WebView2's NavigateToString has NO
-    -- base-URL parameter -- the reason the 2nd arg was silently dropped -- so we replicate
-    -- the semantics by injecting <base href> (below). baseURL may arrive as a real URL
-    -- (file://..., https://...), used verbatim, or a bare Windows path (C:\...\ui\), which
-    -- a browser base href cannot use, so it is converted to a file:/// URL.
-    --
-    -- RISK (rig-verify): a <base href> makes relative refs RESOLVE, but WebView2/Chromium
-    -- only permits file:// SUBRESOURCE loads from a document whose own origin is file://.
-    -- NavigateToString gives the document an opaque origin, so a file:// base may still
-    -- have its ./asset fetches BLOCKED by the security model -- exactly why the sibling
-    -- AHK app Navigate()s to a file:// URL for its UIs instead of stringifying. This works
-    -- as-is for http(s)/virtual-host baseURLs; if file:// assets do not load on the rig,
-    -- the fix is ICoreWebView2_3::SetVirtualHostNameToFolderMapping (map the folder to a
-    -- virtual https host, then set <base href> to that host) -- a new COM slot, not wired.
+    -- Document base URL for a baseURL argument, a file:/// URL for a bare Windows path
     local function toBaseURL(baseURL)
         if type(baseURL) ~= "string" or baseURL == "" then return nil end
-        if baseURL:find("^%a[%w+.-]*://") then return baseURL end  -- already scheme://...
-        local p = baseURL:gsub("\\", "/")                          -- path -> forward slashes
-        if p:find("^/") then return "file://" .. p end             -- already rooted / UNC
-        return "file:///" .. p                                     -- drive path: C:/...
+
+        if baseURL:find("^%a[%w+.-]*://") then return baseURL end
+
+        local p = baseURL:gsub("\\", "/")
+
+        if p:find("^/") then return "file://" .. p end
+
+        return "file:///" .. p
     end
 
-    -- The <base href> tag for a baseURL, or "" when none. Escapes the two attribute-
-    -- breaking chars; the value is otherwise emitted verbatim.
+    -- The <base href> tag for a baseURL, or "" when none
     local function baseTag(baseURL)
         local u = toBaseURL(baseURL)
         if not u then return "" end
+
         u = u:gsub("&", "&amp;"):gsub('"', "&quot;")
+
         return '<base href="' .. u .. '">'
     end
 
-    -- Insert our head content (a <base> for relative-asset resolution, then the bridge
-    -- shim) so it runs before the page's own scripts and refs: right after the opening
-    -- <head> if present, else prepended. <base> goes first so it governs every later
-    -- relative URL in the document.
+    -- Base tag, theme font faces and bridge shim, inserted after <head> or prepended
     local function injectHead(str, baseURL)
         if type(str) ~= "string" then return str end
-        local inject = baseTag(baseURL) .. BRIDGE_SHIM
+
+        local inject = baseTag(baseURL) .. fonts.styleTag() .. BRIDGE_SHIM
+
         if str:find("<head", 1, true) then
             return (str:gsub("(<head[^>]*>)", function(h) return h .. inject end, 1))
         end
+
         return inject .. str
     end
 
