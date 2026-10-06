@@ -171,6 +171,24 @@ $ErrorActionPreference = "Stop"
     }
 # END #
 
+# Legacy Guardian task check #
+    $guardian = Get-ScheduledTask -TaskName "mudscript Guardian" -ErrorAction SilentlyContinue
+
+    $bareBat = $guardian.Actions |
+        Where-Object { $_.Execute -match '\.(bat|cmd)"?$' } |
+        Select-Object -First 1
+
+    if ($bareBat) {
+        $batPath = $bareBat.Execute.Trim('"')
+
+        Warn "the 'mudscript Guardian' task opens a console window every 5 minutes, which steals focus."
+
+        Warn "to run it hidden, paste this into an administrator PowerShell:"
+
+        Warn "  Set-ScheduledTask -TaskName 'mudscript Guardian' -Action (New-ScheduledTaskAction -Execute 'C:\Windows\System32\conhost.exe' -Argument '--headless cmd /c `"$batPath`"')"
+    }
+# END #
+
 # Launch the host #
     # WebView2Loader.dll ships in the repo root; prepend Root to PATH and run FROM Root
     # so LoadLibrary("WebView2Loader.dll") resolves without copying the DLL around.
