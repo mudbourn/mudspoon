@@ -823,6 +823,7 @@ local host = {
 
         return unpack(res, 2, table.maxn(res))
     end
+    jit.off(host.modal)
     -- Keep the pump loop INTERPRETED. PeekMessageA/DispatchMessageA/MsgWaitForMultiple-
     -- Objects here synchronously invoke our FFI callbacks (wndProcs, and the LL keyboard/
     -- mouse hooks). LuaJIT cannot enter a callback from JIT-compiled mcode -- doing so

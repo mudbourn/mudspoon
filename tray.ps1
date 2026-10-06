@@ -1,5 +1,11 @@
-# Hammerspoon tray app: starts the host and gives it a notification area menu #
-    # Single instance. Started hidden by Mudspoon.vbs.
+# Hammerspoon tray app: starts the host and shows a recovery icon while it is down #
+    # Single instance. Started hidden by Mudspoon.vbs. -BugReport and -Autostart act once and exit.
+param(
+    [switch]$BugReport,
+    [ValidateSet("on", "off")]
+    [string]$Autostart
+)
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -23,7 +29,9 @@ $ErrorActionPreference = "Stop"
     $createdNew = $false
     $mutex = New-Object System.Threading.Mutex($true, "Local\MudspoonTray", [ref]$createdNew)
 
-    if (-not $createdNew) { exit 0 }
+    $oneShot = $BugReport -or $Autostart
+
+    if (-not $createdNew -and -not $oneShot) { exit 0 }
 # END #
 
 # Host control #
@@ -112,13 +120,23 @@ $ErrorActionPreference = "Stop"
 
         Start-Process -FilePath "explorer.exe" -ArgumentList "/select,`"$zip`""
     }
+
+    if ($oneShot) {
+        if ($BugReport) { Send-BugReport }
+
+        if ($Autostart) { Set-Autostart ($Autostart -eq "on") }
+
+        if ($createdNew) { $mutex.ReleaseMutex() }
+
+        exit 0
+    }
 # END #
 
 # Menu #
     $icon = New-Object System.Windows.Forms.NotifyIcon
     $icon.Icon = New-Object System.Drawing.Icon (Join-Path $Root "mudspoon.ico")
     $icon.Text = $Title
-    $icon.Visible = $true
+    $icon.Visible = $false
 
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
@@ -127,7 +145,7 @@ $ErrorActionPreference = "Stop"
 
     [void]$menu.Items.Add("-")
 
-    $restart = $menu.Items.Add("Reload / Restart")
+    $restart = $menu.Items.Add("Start Hammerspoon")
     $openLog = $menu.Items.Add("Open boot log")
     $openCfg = $menu.Items.Add("Open config folder")
     $report = $menu.Items.Add("Send bug report")
@@ -153,10 +171,7 @@ $ErrorActionPreference = "Stop"
         $icon.ShowBalloonTip(4000)
     }
 
-    $restart.add_Click({
-        Show-Balloon "Restarting"
-        Restart-Host
-    })
+    $restart.add_Click({ Restart-Host })
 
     $openLog.add_Click({
         if (Test-Path $BootLog) {
@@ -192,18 +207,17 @@ $ErrorActionPreference = "Stop"
 
 # Status poll #
     $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 5000
+    $timer.Interval = 3000
     $timer.add_Tick({
         $up = [bool](Get-HostProcess)
         $status.Text = $(if ($up) { "Status: running" } else { "Status: stopped" })
+        $icon.Visible = -not $up
     })
     $timer.Start()
 # END #
 
 # Run #
     if (-not (Get-HostProcess)) { Start-Host }
-
-    Show-Balloon "Hammerspoon is running"
 
     [System.Windows.Forms.Application]::Run()
 

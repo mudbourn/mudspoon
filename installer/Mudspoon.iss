@@ -37,7 +37,7 @@ CloseApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-WelcomeLabel2=This installs Hammerspoon for Windows %1 with the mudscript config, for bug testing.%n%nIt must run at the physical console of the PC. Remote Desktop (RDP) intercepts input and breaks the keyboard and mouse hooks.%n%nTo report a bug, right-click the tray icon and choose Send bug report. It saves a zip of the logs on your Desktop and opens Explorer on it. Send that zip back along with what you were doing.
+WelcomeLabel2=This installs Hammerspoon for Windows %1 with the mudscript config, for bug testing.%n%nIt must run at the physical console of the PC. Remote Desktop (RDP) intercepts input and breaks the keyboard and mouse hooks.%n%nTo report a bug, open the Start menu and choose Send Hammerspoon bug report. It saves a zip of the logs on your Desktop and opens Explorer on it. Send that zip back along with what you were doing.
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
@@ -57,6 +57,7 @@ Source: "wv2.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{autoprograms}\Hammerspoon for Windows"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\app\Mudspoon.vbs"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\mudspoon.ico"
+Name: "{autoprograms}\Send Hammerspoon bug report"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\app\tray.ps1"" -BugReport"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\mudspoon.ico"
 Name: "{autodesktop}\Hammerspoon for Windows"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\app\Mudspoon.vbs"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\mudspoon.ico"; Tasks: desktopicon
 
 [Registry]
