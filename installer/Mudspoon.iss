@@ -101,6 +101,48 @@ begin
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+function InstalledUninstaller: string;
+var
+  Key: string;
+begin
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8F4C2D1A-6B3E-4C7A-9D52-3E1B7A0C94F6}_is1';
+
+  if not RegQueryStringValue(HKCU, Key, 'UninstallString', Result) then
+    if not RegQueryStringValue(HKLM, Key, 'UninstallString', Result) then
+      Result := '';
+end;
+
+function InitializeSetup: Boolean;
+var
+  Uninstaller: string;
+  Choice: Integer;
+  ResultCode: Integer;
+begin
+  Result := True;
+
+  Uninstaller := InstalledUninstaller;
+
+  if (Uninstaller = '') or WizardSilent then
+    exit;
+
+  Choice := TaskDialogMsgBox(
+    'Hammerspoon for Windows is already installed.',
+    'Repair reinstalls the app files and keeps your settings and macros. Uninstall removes the app.',
+    mbConfirmation,
+    MB_YESNOCANCEL,
+    ['Repair', 'Uninstall'],
+    0);
+
+  if Choice = IDNO then
+  begin
+    Exec(RemoveQuotes(Uninstaller), '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+
+    Result := False;
+  end
+  else if Choice = IDCANCEL then
+    Result := False;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
