@@ -91,6 +91,10 @@ BOOL    PeekMessageA(MSG*, HWND, UINT, UINT, UINT);
 BOOL    TranslateMessage(const MSG*);
 LRESULT DispatchMessageA(const MSG*);
 DWORD   MsgWaitForMultipleObjects(DWORD, const HANDLE*, BOOL, DWORD, DWORD);
+
+typedef void (__stdcall *TIMERPROC)(HWND, UINT, ULONG_PTR, DWORD);
+ULONG_PTR SetTimer(HWND, ULONG_PTR, UINT, TIMERPROC);
+BOOL    KillTimer(HWND, ULONG_PTR);
 ]]
 -- END --
 
@@ -751,16 +755,30 @@ local host = {
     local running = false
     local msgBuf  = ffi.new("MSG")
 
+    local hbFile = os.getenv("MUDSPOON_HEARTBEAT_FILE")
+    local hbLast = 0
+
+    -- Watchdog heartbeat write, at most once a second
+    local function beat()
+        if not hbFile then return end
+
+        local now = host.now()
+        if now - hbLast < 1000 then return end
+
+        hbLast = now
+
+        pcall(function()
+            local f = io.open(hbFile, "w")
+            if f then
+                f:write(tostring(now))
+                f:close()
+            end
+        end)
+    end
+
     function host.run()
         if running then return end
         running = true
-        -- Watchdog heartbeat: an external monitor (launch.ps1) kills this host if the
-        -- file stops being touched, so a hung runloop can never freeze system input for
-        -- more than a few seconds. Writing after runTimers means a macro that hangs a
-        -- timer callback stops the heartbeat, which is exactly the case we must catch.
-        -- The idle wait is capped so the loop still ticks (and beats) on a quiet desktop.
-        local hbFile = os.getenv("MUDSPOON_HEARTBEAT_FILE")
-        local hbLast = 0
         while running do
             local to = nextTimeout()
             if hbFile and (to == nil or to > 1000) then to = 1000 end
@@ -770,20 +788,40 @@ local host = {
                 U.DispatchMessageA(msgBuf)
             end
             runTimers()
-            if hbFile then
-                local now = host.now()
-                if now - hbLast >= 1000 then
-                    hbLast = now
-                    pcall(function()
-                        local f = io.open(hbFile, "w")
-                        if f then
-                            f:write(tostring(now))
-                            f:close()
-                        end
-                    end)
-                end
-            end
+            beat()
         end
+    end
+
+    -- Modal tick: timers and heartbeat while a modal loop owns the thread
+    local MODAL_TICK_MS = 15
+    local modalDepth = 0
+
+    local function modalBody()
+        runTimers()
+        beat()
+    end
+    jit.off(modalBody, true)
+
+    local modalProc = ffi.cast("TIMERPROC", function()
+        local ok, err = pcall(modalBody)
+        if not ok then io.stderr:write("hammerspoon modal tick error: " .. tostring(err) .. "\n") end
+    end)
+
+    -- Runs fn(...), a call that enters a modal Win32 loop, with the scheduler kept alive
+    function host.modal(fn, ...)
+        modalDepth = modalDepth + 1
+
+        local id = (modalDepth == 1) and U.SetTimer(nil, 0, MODAL_TICK_MS, modalProc) or 0
+
+        local res = { pcall(fn, ...) }
+
+        if id ~= 0 then U.KillTimer(nil, id) end
+
+        modalDepth = modalDepth - 1
+
+        if not res[1] then error(res[2], 2) end
+
+        return unpack(res, 2, table.maxn(res))
     end
     -- Keep the pump loop INTERPRETED. PeekMessageA/DispatchMessageA/MsgWaitForMultiple-
     -- Objects here synchronously invoke our FFI callbacks (wndProcs, and the LL keyboard/

@@ -34,7 +34,9 @@ $ErrorActionPreference = "Stop"
 # Config #
     $Root       = $PSScriptRoot
     $InstallDir = "C:\tools\luajit"
-    # Evergreen WebView2 runtime's registered product GUID (stable, Microsoft-assigned).
+    $Bundled    = Join-Path $Root "luajit\luajit.exe"
+
+    # WebView2 runtime product GUID
     $WV2_GUID   = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 # END #
 
@@ -52,14 +54,15 @@ $ErrorActionPreference = "Stop"
     }
 # END #
 
-# Resolve luajit.exe: PATH, then the pinned folder, else winget-install + pin #
+# Resolve luajit.exe #
     function Find-LuaJITExe {
+        if (Test-Path $Bundled) { return $Bundled }
         if (Have luajit) { return (Get-Command luajit).Source }
         if (Test-Path "$InstallDir\luajit.exe") { return "$InstallDir\luajit.exe" }
         return $null
     }
 
-    # Absorbs setup.ps1's locate-and-pin so a fresh rig needs nothing pre-done.
+    # Installs LuaJIT with winget and pins it into the install folder
     function Install-LuaJIT {
         Winget-Install "Microsoft.VCRedist.2015+.x64"   # LuaJIT links the VC++ runtime
         Winget-Install "DEVCOM.LuaJIT"
@@ -82,7 +85,6 @@ $ErrorActionPreference = "Stop"
             throw "LuaJIT installed but no luajit.exe was placed. Build from source with setup.sh."
         }
 
-        # Pin into a stable folder so future launches resolve it without a PATH hunt.
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
         $srcDir = Split-Path $exe
         Copy-Item "$srcDir\luajit.exe" $InstallDir -Force

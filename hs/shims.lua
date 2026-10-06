@@ -221,6 +221,10 @@ int MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned 
             local kind = EDITOR_NAMES[app:lower():gsub("%.app$", "")]
             local exe = kind and editorExe(kind)
 
+            if not exe and app:lower():match("%.exe$") then
+                exe = winTarget(app)
+            end
+
             if exe then
                 return {
                     file = exe,

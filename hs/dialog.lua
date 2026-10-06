@@ -126,12 +126,21 @@ long  CoInitialize(void*);
     -- nil/empty -> just an All-Files entry. The block is double-NUL terminated.
     local function filterBlock(types)
         local pats = {}
+        local label = "Supported Files"
         if type(types) == "table" then
-            for _, t in ipairs(types) do pats[#pats + 1] = "*." .. tostring(t) end
+            for _, t in ipairs(types) do
+                if tostring(t) == "app" then
+                    label = "Applications"
+                    pats[#pats + 1] = "*.exe"
+                    pats[#pats + 1] = "*.lnk"
+                else
+                    pats[#pats + 1] = "*." .. tostring(t)
+                end
+            end
         end
         local parts
         if #pats > 0 then
-            parts = { "Supported Files", table.concat(pats, ";"), "All Files", "*.*" }
+            parts = { label, table.concat(pats, ";"), "All Files", "*.*" }
         else
             parts = { "All Files", "*.*" }
         end
@@ -152,7 +161,7 @@ local dialog = {}
         end
         local kind = button2 and MB_OKCANCEL or MB_OK
         local flags = bit.bor(kind, MB_ICONWARNING, MB_SETFOREGROUND)
-        local ret = U.MessageBoxA(nil, cstr(text), cstr("mudscript"), flags)
+        local ret = host.modal(U.MessageBoxA, nil, cstr(text), cstr("mudscript"), flags)
         if not button2 then return button1 end
         return (ret == IDOK) and button1 or button2
     end
@@ -167,7 +176,7 @@ local dialog = {}
         bi.pszDisplayName = disp
         bi.lpszTitle      = ffi.cast("LPCSTR", cstr(title or "Choose a folder"))
         bi.ulFlags        = bit.bor(BIF_RETURNONLYFSDIRS, BIF_NEWDIALOGSTYLE)
-        local pidl = SH.SHBrowseForFolderA(bi)
+        local pidl = host.modal(SH.SHBrowseForFolderA, bi)
         if pidl == nil then return nil end
         local out = ffi.new("char[?]", MAX_PATH)
         local ok  = SH.SHGetPathFromIDListA(pidl, out) ~= 0
@@ -187,6 +196,11 @@ local dialog = {}
         ofn.lpstrFilter     = ffi.cast("LPCSTR", filterBlock(types))
         ofn.nFilterIndex    = 1
         ofn.lpstrTitle      = ffi.cast("LPCSTR", cstr(title or "Choose a file"))
+
+        if defaultPath == "/Applications" then
+            defaultPath = os.getenv("ProgramFiles") or "C:\\Program Files"
+        end
+
         if defaultPath and #tostring(defaultPath) > 0 then
             ofn.lpstrInitialDir = ffi.cast("LPCSTR", cstr(defaultPath))
         end
@@ -194,7 +208,7 @@ local dialog = {}
         if allowMultiple then flags = bit.bor(flags, OFN_ALLOWMULTISELECT) end
         ofn.Flags = flags
 
-        if CD.GetOpenFileNameA(ofn) == 0 then return nil end   -- cancelled or error
+        if host.modal(CD.GetOpenFileNameA, ofn) == 0 then return nil end   -- cancelled or error
 
         -- Single select: buf is one full path. Multiselect (EXPLORER): a directory,
         -- then each file name, each NUL-separated, ending in a double NUL. If only one
