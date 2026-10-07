@@ -6,6 +6,7 @@
     --   hs.task.new(path, doneFn, streamFn)             -- streamFn(task, out, err)->bool
     --   task:start()   -> task (truthy) on launch, nil on failure
     --   task:terminate()
+    --   task:setInput(data), task:closeInput()
     -- The 4-arg form new(path, doneFn, streamFn, argsTable) is accepted too (hs parity).
     --
     -- WINDOWS ASYNC MODEL: mudspoon is one thread + one message pump, so we cannot
@@ -59,6 +60,9 @@ DWORD  WaitForSingleObject(HANDLE, DWORD);
 BOOL   GetExitCodeProcess(HANDLE, DWORD*);
 BOOL   TerminateProcess(HANDLE, UINT);
 BOOL   CloseHandle(HANDLE);
+BOOL   CreatePipe(HANDLE*, HANDLE*, SECURITY_ATTRIBUTES*, DWORD);
+BOOL   SetHandleInformation(HANDLE, DWORD, DWORD);
+BOOL   WriteFile(HANDLE, const void*, DWORD, DWORD*, void*);
 ]]
 -- END --
 
@@ -70,8 +74,9 @@ BOOL   CloseHandle(HANDLE);
     local FILE_ATTRIBUTE_NORMAL= 0x00000080
     local STARTF_USESTDHANDLES = 0x00000100
     local CREATE_NO_WINDOW     = 0x08000000
-    local STD_INPUT_HANDLE     = 0xFFFFFFF6  -- (DWORD)-10
-    local WAIT_OBJECT_0        = 0
+    local HANDLE_FLAG_INHERIT  = 0x00000001
+    local STDIN_PIPE_BYTES     = 65536
+    local WAIT_OBJECT_0       = 0
     local POLL_MS              = 40           -- how often the runloop tails the child
 
     local IS_WINDOWS = package.config:sub(1, 1) == "\\"
@@ -146,6 +151,8 @@ local task = {}
         local stderr = errAll and (errAll:read("*a") or "") or ""
         if outAll then outAll:close() end
         if errAll then errAll:close() end
+
+        self:closeInput()
 
         if self._hProc then K.CloseHandle(self._hProc); self._hProc = nil end
         if self._hThread then K.CloseHandle(self._hThread); self._hThread = nil end
@@ -239,29 +246,44 @@ local task = {}
         local cmdbuf = ffi.new("char[?]", #cmdline + 1)
         ffi.copy(cmdbuf, cmdline)
 
+        local inRead = ffi.new("HANDLE[1]")
+        local inWrite = ffi.new("HANDLE[1]")
+
+        if K.CreatePipe(inRead, inWrite, sa, STDIN_PIPE_BYTES) == 0 then
+            K.CloseHandle(hOut)
+            K.CloseHandle(hErr)
+            return nil
+        end
+
+        K.SetHandleInformation(inWrite[0], HANDLE_FLAG_INHERIT, 0)
+
         local si = ffi.new("STARTUPINFOA")
         si.cb = ffi.sizeof("STARTUPINFOA")
         si.dwFlags = STARTF_USESTDHANDLES
-        si.hStdInput  = K.GetStdHandle(STD_INPUT_HANDLE)
+        si.hStdInput = inRead[0]
         si.hStdOutput = hOut
-        si.hStdError  = hErr
+        si.hStdError = hErr
 
         local pi = ffi.new("PROCESS_INFORMATION")
-        -- lpApplicationName NULL => resolve program from the command line + PATH.
+
         local ok = K.CreateProcessA(nil, cmdbuf, nil, nil, true,
             CREATE_NO_WINDOW, nil, nil, si, pi)
 
-        -- The child inherited its own copies of the handles; drop ours so the files
-        -- close (and flush) when the child exits.
         K.CloseHandle(hOut)
+
         K.CloseHandle(hErr)
 
+        K.CloseHandle(inRead[0])
+
         if ok == 0 then
+            K.CloseHandle(inWrite[0])
+
             os.remove(self._outPath)
             os.remove(self._errPath)
             return nil
         end
 
+        self._stdin   = inWrite[0]
         self._hProc   = pi.hProcess
         self._hThread = pi.hThread
         self._running = true
@@ -305,6 +327,31 @@ local task = {}
     function Task:isRunning()
         return self._running == true
     end
+
+    -- Task:setInput --
+        function Task:setInput(data)
+            if not self._stdin then return self end
+
+            local s = tostring(data)
+            local wrote = ffi.new("DWORD[1]")
+
+            K.WriteFile(self._stdin, s, #s, wrote, nil)
+
+            return self
+        end
+    -- END Task:setInput --
+
+    -- Task:closeInput --
+        function Task:closeInput()
+            if self._stdin then
+                K.CloseHandle(self._stdin)
+
+                self._stdin = nil
+            end
+
+            return true
+        end
+    -- END Task:closeInput --
 -- END --
 
 -- new --

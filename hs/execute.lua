@@ -773,7 +773,7 @@ int BCryptDestroyHash(void*);
         local out, ok
 
         if with_shell and IS_WINDOWS then
-            local rout, _, rok = runViaSh(shims.zipCommand(command) or command)
+            local rout, _, rok = runViaSh(shims.zipCommand(command) or shims.unzipListCommand(command) or command)
             if rout == nil then return "", nil, "exit", -1 end
             out, ok = rout, rok
         else

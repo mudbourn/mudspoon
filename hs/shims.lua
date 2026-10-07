@@ -360,6 +360,32 @@ int MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned 
         return prefix .. table.concat(parts, " ")
     end
 
+    -- Rewrites "/usr/bin/unzip -Z1 ARCHIVE" to a bsdtar listing
+    function shims.unzipListCommand(command)
+        local rest = command:match("^%s*/usr/bin/unzip%s+%-Z1%s+(.*)$")
+        if not rest then return nil end
+
+        local redirect = rest:match("%s+(2>/dev/null)%s*$")
+
+        rest = rest:gsub("%s+2>/dev/null%s*$", "")
+
+        if hasShellSyntax(rest) then return nil end
+
+        local argv = words(rest)
+        if not argv or #argv ~= 1 then return nil end
+
+        local parts = {
+            shQuote(tarExe()),
+            "-t",
+            "-f",
+            shQuote(argv[1]),
+        }
+
+        if redirect then parts[#parts + 1] = redirect end
+
+        return table.concat(parts, " ")
+    end
+
     -- The tar argv for a zip task, or nil when the path is not zip
     function shims.zipTaskArgs(args)
         local out, items = splitZipArgs(args)
