@@ -249,13 +249,13 @@ local task = {}
         local inRead = ffi.new("HANDLE[1]")
         local inWrite = ffi.new("HANDLE[1]")
 
-        if K.CreatePipe(inRead, inWrite, sa, STDIN_PIPE_BYTES) == 0 then
+        if K.CreatePipe(inRead, inWrite, nil, STDIN_PIPE_BYTES) == 0 then
             K.CloseHandle(hOut)
             K.CloseHandle(hErr)
             return nil
         end
 
-        K.SetHandleInformation(inWrite[0], HANDLE_FLAG_INHERIT, 0)
+        K.SetHandleInformation(inRead[0], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
 
         local si = ffi.new("STARTUPINFOA")
         si.cb = ffi.sizeof("STARTUPINFOA")

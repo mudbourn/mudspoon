@@ -18,6 +18,7 @@ DefaultDirName={localappdata}\Mudspoon
 DefaultGroupName=Hammerspoon for Windows
 DisableProgramGroupPage=yes
 DisableDirPage=auto
+DirExistsWarning=no
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
