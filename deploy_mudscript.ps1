@@ -194,7 +194,13 @@ if (Test-Path $layerExe) {
     New-Item -ItemType Directory -Force -Path $localBin | Out-Null
     try {
         if (Test-Path $layerDest) {
-            try { Copy-File $layerExe $layerDest } catch { Move-Item $layerDest "$layerDest.old" -Force; Copy-File $layerExe $layerDest }
+            try {
+                Copy-File $layerExe $layerDest
+            } catch {
+                Move-Item $layerDest "$layerDest.old" -Force
+
+                Copy-File $layerExe $layerDest
+            }
         } else {
             Copy-File $layerExe $layerDest
         }

@@ -458,10 +458,13 @@
     -- Runs hs.shutdownCallback once under pcall, then clears it
     local function runShutdownCallback()
         local cb = hs.shutdownCallback
+
         hs.shutdownCallback = nil
+
         if type(cb) ~= "function" then return end
 
         local okcb, cberr = pcall(cb)
+
         if not okcb then io.stderr:write("hs.shutdownCallback error: " .. tostring(cberr) .. "\n") end
     end
 
