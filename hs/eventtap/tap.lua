@@ -74,6 +74,19 @@ local KEY_TYPES = { keyDown = true, keyUp = true, flagsChanged = true }
     end
 -- END --
 
+-- External owner extension --
+    -- hs.eventtap._externalOwner(on): lets an external input daemon with its own
+    -- low-level hooks coexist with the host hooks.
+    function eventtap._externalOwner(on)
+        host.setExternalOwner(on)
+    end
+
+    -- hs.eventtap._onHostRehook(fn): fn runs after the host installs a hook. nil clears.
+    function eventtap._onHostRehook(fn)
+        host.onRehook(fn)
+    end
+-- END --
+
 -- Constructor --
     -- hs.eventtap.new(types, fn): types is an array of event-type strings (the
     -- contract-1 names, which are exactly the values in hs.eventtap.event.types).

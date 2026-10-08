@@ -6,9 +6,9 @@
   "schema": 1,
   "summary": {
     "error": 0,
-    "fail": 0,
-    "pass": 90,
-    "skip": 1,
+    "fail": 1,
+    "pass": 85,
+    "skip": 5,
     "timeout": 0,
     "total": 91
   },
@@ -446,28 +446,28 @@
       "status": "pass"
     },
     {
+      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
       "id": "webview.new",
       "kind": "contract",
       "module": "webview",
       "name": "new",
-      "observed": "function",
-      "status": "pass"
+      "status": "skip"
     },
     {
+      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
       "id": "webview.usercontent.new",
       "kind": "contract",
       "module": "webview",
       "name": "usercontent.new",
-      "observed": "function",
-      "status": "pass"
+      "status": "skip"
     },
     {
+      "detail": "module 'webview' is a black-hole stub (opt-in / unbuilt on this host)",
       "id": "webview.windowMasks",
       "kind": "contract",
       "module": "webview",
       "name": "windowMasks",
-      "observed": "table",
-      "status": "pass"
+      "status": "skip"
     },
     {
       "id": "configdir.exists",
@@ -585,12 +585,12 @@
       "status": "pass"
     },
     {
+      "detail": "file hash differs for abc.txt: native \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad *C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791437744_339334/abc.txt\\\n\" true 0, shell \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791437744_339334/abc.txt\\\n\" true 0",
       "id": "execute.hash-parity",
       "kind": "behavior",
       "module": "execute",
       "name": "hash-parity",
-      "observed": "d36b43db4a23c8f4cb5ab3329ed44e059fc989ae94f452b6142f517557160845",
-      "status": "pass"
+      "status": "fail"
     },
     {
       "id": "execute.base64-uname",
@@ -692,6 +692,14 @@
       "status": "pass"
     },
     {
+      "detail": "hs.webview unavailable or stubbed",
+      "id": "webview.evaluateJavaScript-callback",
+      "kind": "behavior-async",
+      "module": "webview",
+      "name": "evaluateJavaScript-callback",
+      "status": "skip"
+    },
+    {
       "id": "ipc.load-shape",
       "kind": "behavior",
       "module": "ipc",
@@ -724,15 +732,6 @@
       "status": "pass"
     },
     {
-      "detail": "result=3 err=nil",
-      "id": "webview.evaluateJavaScript-callback",
-      "kind": "behavior-async",
-      "module": "webview",
-      "name": "evaluateJavaScript-callback",
-      "observed": 3,
-      "status": "pass"
-    },
-    {
       "detail": "userInfo not round-tripped",
       "id": "distributednotifications.roundtrip",
       "kind": "behavior-async",
@@ -750,5 +749,5 @@
       "status": "pass"
     }
   ],
-  "timestamp": "2026-10-05T08:01:56Z"
+  "timestamp": "2026-10-08T05:35:45Z"
 }

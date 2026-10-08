@@ -102,6 +102,24 @@ A module that must block the thread on an external process calls
   the low level hooks time out and system input freezes.
 - `hs.execute` is the only caller today.
 
+### External owner extension (an extension of contract 3)
+
+An external input daemon with its own low level hooks coexists with the host
+hooks through two functions on `hs.eventtap`. The event object, the keycodes map
+and `host.onKey` / `host.onMouse` are unchanged.
+
+- `hs.eventtap._externalOwner(on)` turns external owner mode on or off. While on:
+  - both host hooks stay installed with zero subscribers, so hook order stops
+    changing.
+  - events whose `dwExtraInfo` is 999 (the daemon's own injections) reach no
+    subscriber and do not update held key or button state.
+  - the hooks swallow an event only when a Lua tap returns a truthy swallow, and
+    every other event goes on with `CallNextHookEx`.
+  - Ctrl+Alt+Pause still runs the emergency stop.
+- `hs.eventtap._onHostRehook(fn)` registers one callback. The host runs it on the
+  runloop after each time it installs a low level hook, so the daemon can
+  reinstall its own hooks and stay first in the chain. Passing nil clears it.
+
 ## Shared rules
 
 - **Keep FFI callbacks alive.** Any `ffi.cast(...)` used as a callback must be

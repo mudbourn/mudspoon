@@ -1,112 +1,100 @@
 # mudspoon
 
-A Hammerspoon compatibility layer for Windows. A standalone LuaJIT host that
-implements the `hs.*` API surface so tools written against Hammerspoon run
-unmodified on Windows, with mudscript as the first consumer. Closer in spirit to
-Proton or FEX than to a per-app port.
+A Hammerspoon compatibility layer for Windows. A standalone LuaJIT host
+implements the `hs.*` API through FFI calls to `user32`, `kernel32` and `gdi32`,
+so tools written against Hammerspoon run unmodified on Windows. mudscript is the
+first consumer.
 
-`mudspoon` is only the repo/project codename. At runtime the host presents itself
-as Hammerspoon — process identity (`hs.processInfo.bundleID`), window classes
-(`HammerspoonWebView`, `HammerspoonCanvas`, `HammerspoonAlert`, ...), the boot log
-(`hammerspoon.log`), and log tags — so tools that probe for Hammerspoon see it.
+`mudspoon` is only the repo codename. At runtime the host presents itself as
+Hammerspoon: process identity (`hs.processInfo.bundleID`), window classes
+(`HammerspoonWebView`, `HammerspoonCanvas`, `HammerspoonAlert`), the boot log
+(`hammerspoon.log`) and log tags. Tools that probe for Hammerspoon see it.
 
-## Status: spike stage
+The host runs at a physical console session. RDP intercepts input and
+misreports the low-level hooks.
 
-No module tree, no WebView2, no Guardian, no signing yet. One file carries the
-whole thesis: that real Lua can drive Win32 through FFI well enough to replace
-Hammerspoon.
+## Layout
 
-### `spike_hook_loop_alert.lua`
+- `run_mudscript.lua`: the host glue that Hammerspoon.app normally provides. It
+  builds `hs`, sets `HOME` to the folder that holds `.hammerspoon`, and runs
+  mudscript's `init.lua` on the foundation runloop.
+- `hs/`: one module per `hs.*` extension. `hs/foundation.lua` owns the Win32
+  message pump, the timer scheduler, the low-level keyboard and mouse hooks and
+  the clock.
+- `launch.ps1`, `stop.ps1`, `watchdog.ps1`, `tray.ps1`: start, stop and guard the
+  windowless host.
+- `hs.cmd`: the `hs` command line client for the `hs.ipc` endpoint.
+- `installer/`: the Inno Setup installer.
+- `test/`: the smoke and parity suite.
 
-Three legs in one single-threaded process:
+`CONTRIBUTING.md` holds the module contracts and `WRITING_STYLE.md` the style
+rules.
 
-1. A global keyboard hook (`WH_KEYBOARD_LL`) via FFI, which intercepts rather than
-   only observes.
-2. The event loop. A Win32 message pump married to a Lua timer scheduler on one
-   thread (`MsgWaitForMultipleObjects`). Every future `hs.timer`, `hs.eventtap`, and
-   alert animation hangs off this. macOS gives Hammerspoon the same thing through its
-   runloop.
-3. A native layered alert window (rounded rect, text, alpha fade) driven by leg 2.
-   The `hs.canvas` and `ms_alert` replacement, without antialiasing or hit-testing.
+## Installing
 
-`Ctrl+Alt+K` popping a fading alert and swallowing the K means the architecture holds.
+`installer\build.ps1` stages the host, LuaJIT and a deployed copy of mudscript,
+then compiles `installer\Output\Mudspoon-Setup.exe` with Inno Setup 6.
 
-## Running mudscript (one click)
+```
+powershell -ExecutionPolicy Bypass -File installer\build.ps1
+```
 
-The Windows equivalent of double-clicking `Hammerspoon.app`. mudspoon is the host;
-mudscript is the config it loads from the sibling `../.hammerspoon`.
+The installer puts everything under `%LOCALAPPDATA%\Mudspoon`:
 
-**Double-click `Mudspoon.cmd`.**
+- `app\`: the host, LuaJIT and the launch scripts.
+- `.hammerspoon\`: the mudscript config the host boots from. User data in
+  `.hammerspoon\data` survives updates and uninstall.
 
-On first run it auto-installs whatever is missing via winget — LuaJIT (+ the VC++
-runtime), the WebView2 runtime (the shell and loading screens are WebView2, and are
-invisible without it), and a POSIX shell (Git for Windows) for mac/'s file ops — then
-boots the host **windowless and detached**, so it keeps running after the launcher
-window closes. Later launches skip straight past the checks.
+## Running
 
-- `Mudspoon.cmd -Foreground` — run attached, streaming the boot log (Ctrl+C stops it).
-- `Mudspoon.cmd -NoWebview` — headless macro host, no WebView2 UI.
-- `Mudspoon.cmd -SkipDeps` — fastest re-launch, skip the dependency preflight.
-- `Stop-Mudspoon.cmd` — quit the windowless host from outside (its menubar quit also works).
+Double-click `Mudspoon.cmd`. On first run `launch.ps1` installs anything missing
+with winget: LuaJIT and the VC++ runtime, the WebView2 runtime that draws every
+UI window, and Git for Windows as a POSIX shell. It then starts the host
+windowless and detached, with the watchdog beside it.
 
-The launcher (`launch.ps1`) also sets `MUDSPOON_WEBVIEW=1` and puts the bundled
-`WebView2Loader.dll` on the DLL search path — the two steps that were previously
-manual and, if forgotten, left the whole UI invisible. Still a physical console
-session, not RDP: RDP intercepts input and misreports the low-level hooks.
+| Flag | Effect |
+| --- | --- |
+| `-Foreground` | Run attached and stream the boot log. Ctrl+C stops it. |
+| `-NoWebview` | Headless macro host with no WebView2 UI. |
+| `-SkipDeps` | Skip the dependency preflight. |
+| `-NoGlass` | Draw webviews on layered windows instead of DWM glass windows. |
+| `-Dev` | Start the `hs.ipc` endpoint for `hs.cmd`. |
 
-## Running the spikes / smoke tests
+`Stop-Mudspoon.cmd` quits the windowless host. The menubar quit also works.
 
-On the Windows PC, at the physical console, foreground, not over RDP. RDP intercepts
-input and misreports hooks.
+With `-Dev`, `hs.cmd` sends Lua to the running host and prints the result:
 
-Needs only `luajit.exe`. No C compiler and no `winapi` module. FFI calls
-`user32`, `kernel32`, and `gdi32` directly.
+```
+hs.cmd -c "print(hs.configdir)"
+```
 
-Get LuaJIT installed and on PATH on a bare rig with the PowerShell setup. It
-installs via winget, pins the binary to `C:\tools\luajit`, fixes PATH, and
-verifies.
+From a checkout, the host boots the sibling `..\.hammerspoon`.
+`deploy_mudscript.ps1` copies the mudscript source into that tree and re-seeds
+the Guardian trusted hash.
+
+## Setup from a checkout
+
+`setup.ps1` installs LuaJIT with winget and pins it to `C:\tools\luajit`.
 
 ```
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-Then run the spike:
-
-```
-luajit spike_hook_loop_alert.lua
-```
-
-`setup.sh` remains as a from-source build (LuaJIT via MSVC in Git Bash) for rigs
+`setup.sh` builds LuaJIT from source with MSVC in Git Bash, for machines
 without winget.
 
-- `Ctrl+Alt+K` pops a native alert and swallows the K keystroke.
-- `Ctrl+Alt+Q` quits.
+## Testing
 
-### First run of the module tree
+`test\smoke.lua` runs unchanged under real Hammerspoon and mudspoon.
+`test\smoke_win.ps1` and `test\smoke_mac.sh` run it on each platform and
+`test\diff_smoke.lua` compares the two reports. `test\README.md` has the details.
 
-The spike is one file of raw FFI. The `hs/` tree is the rewrite, and its FFI
-packets (foundation, C, E, G) have only been compile- and logic-checked — no
-Win32 behaviour of theirs has run yet. `smoke.lua` is the first exercise of it:
-it loads `hs`, binds one hotkey, and runs the loop. Same console rules as the
-spike (physical, foreground, not RDP).
+The top-level `spike_*.lua`, `smoke*.lua` and `probe_hook.lua` are the first
+exercises of the FFI architecture.
 
-```
-luajit smoke.lua
-```
+## Known limits
 
-Press `Ctrl+Alt+K`. It passes (exit 0) if the chord fires, the `K` never reaches
-the focused window (swallowed), and the process exits cleanly. It fails (exit 1)
-if 30s pass with no chord — the hook likely never installed.
-
-## Open before this reaches another machine
-
-Not blocking the spike.
-
-1. Code signing and SmartScreen. An unsigned background process installing a global
-   keyboard hook is the exact profile AV heuristics flag. Budget a certificate and
-   plain "why did Windows flag this" messaging before first release.
-2. Integrity-level matching. Elevated games need the host run as admin to be hookable.
-   Ship user-level and document it, the pattern AHK uses today.
-3. Guardian redesign and self-update. Direction is picked, design pass is owed.
-
-Full reasoning lives in the Obsidian plan `Mudscript Windows.md`.
+- The host is unsigned. A background process with a global keyboard hook can be
+  flagged by antivirus and SmartScreen.
+- The host runs at user level. A game running elevated needs the host run as
+  administrator to receive its input.

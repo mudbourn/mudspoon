@@ -65,7 +65,7 @@ local keycodes = {}
         def("pad.", 65, 0x6E)
         def("pad/", 75, 0x6F)
         def("pad=", 81, 0x92)
-        def("padclear", 71, 0x90)
+        def("padclear", 71, 0x0C)
         def("padenter", 76, 0x0D)
     -- END --
 

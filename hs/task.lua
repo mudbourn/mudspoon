@@ -1,40 +1,10 @@
--- hs.task  (leaf, Foundation-backed) --
-    -- Asynchronous subprocess, the async muscle mac/ leans on (curl downloads,
-    -- shasum hashing, the gamepad reader). The slice mac/ actually uses:
-    --   hs.task.new(path, doneFn)                       -- doneFn(exitCode, out, err)
-    --   hs.task.new(path, doneFn, argsTable)            -- args as an array (no shell)
-    --   hs.task.new(path, doneFn, streamFn)             -- streamFn(task, out, err)->bool
-    --   task:start()   -> task (truthy) on launch, nil on failure
-    --   task:terminate()
-    --   task:setInput(data), task:closeInput()
-    -- The 4-arg form new(path, doneFn, streamFn, argsTable) is accepted too (hs parity).
-    --
-    -- WINDOWS ASYNC MODEL: mudspoon is one thread + one message pump, so we cannot
-    -- block on the child. We launch via CreateProcessA with stdout/stderr redirected
-    -- to inheritable temp files, then POLL WaitForSingleObject(h, 0) off the runloop
-    -- (host.schedule). Temp files (not pipes) sidestep the classic pipe-buffer
-    -- deadlock and let a streaming child's stdout be tailed incrementally with plain
-    -- Lua file IO. On exit we read the files, fire doneFn(exitCode, stdout, stderr),
-    -- and clean up. This reuses execute.lua's "spawn + capture to disk" spirit while
-    -- staying non-blocking.
-    --
-    -- UNIX-PATH TRANSLATION: mac/ passes mac launch paths like "/usr/bin/curl".
-    -- Those don't exist on Windows, so if the given path can't be opened we fall
-    -- back to its BASENAME and let CreateProcess search PATH (curl.exe, shasum, ...).
-    -- An absolute path that DOES exist (e.g. the gamepad binary on the rig) is used
-    -- verbatim. RIG-UNVERIFIED: no Windows here to prove the PATH search.
--- END --
-
 local host = require("hs.foundation")
 local shims = require("hs.shims")
 local ffi  = host.ffi
 local bit  = host.bit
 local K    = host.C.kernel32
 
--- Process FFI (functions + structs NOT owned by Foundation) --
-    -- Foundation owns HANDLE/DWORD/BOOL/WORD/BYTE/UINT/void*, so those are reused.
-    -- STARTUPINFOA / PROCESS_INFORMATION / SECURITY_ATTRIBUTES are ours to declare
-    -- (nothing else does). char* stands in for LPSTR to avoid a new typedef.
+-- Process and pipe FFI --
     ffi.cdef[[
 typedef struct {
   DWORD  cb;            char*  lpReserved;  char*  lpDesktop;  char*  lpTitle;
@@ -52,10 +22,38 @@ typedef struct {
   DWORD nLength; void* lpSecurityDescriptor; BOOL bInheritHandle;
 } SECURITY_ATTRIBUTES;
 
+typedef struct {
+  int64_t   PerProcessUserTimeLimit;
+  int64_t   PerJobUserTimeLimit;
+  DWORD     LimitFlags;
+  size_t    MinimumWorkingSetSize;
+  size_t    MaximumWorkingSetSize;
+  DWORD     ActiveProcessLimit;
+  uintptr_t Affinity;
+  DWORD     PriorityClass;
+  DWORD     SchedulingClass;
+} mudtask_JOBBASIC;
+
+typedef struct {
+  uint64_t ReadOperationCount;
+  uint64_t WriteOperationCount;
+  uint64_t OtherOperationCount;
+  uint64_t ReadTransferCount;
+  uint64_t WriteTransferCount;
+  uint64_t OtherTransferCount;
+} mudtask_IOCOUNTERS;
+
+typedef struct {
+  mudtask_JOBBASIC   BasicLimitInformation;
+  mudtask_IOCOUNTERS IoInfo;
+  size_t             ProcessMemoryLimit;
+  size_t             JobMemoryLimit;
+  size_t             PeakProcessMemoryUsed;
+  size_t             PeakJobMemoryUsed;
+} mudtask_JOBEXT;
+
 BOOL   CreateProcessA(const char*, char*, void*, void*, BOOL, DWORD,
-                      void*, const char*, STARTUPINFOA*, PROCESS_INFORMATION*);
-HANDLE CreateFileA(const char*, DWORD, DWORD, SECURITY_ATTRIBUTES*, DWORD, DWORD, HANDLE);
-HANDLE GetStdHandle(DWORD);
+                  void*, const char*, STARTUPINFOA*, PROCESS_INFORMATION*);
 DWORD  WaitForSingleObject(HANDLE, DWORD);
 BOOL   GetExitCodeProcess(HANDLE, DWORD*);
 BOOL   TerminateProcess(HANDLE, UINT);
@@ -63,61 +61,154 @@ BOOL   CloseHandle(HANDLE);
 BOOL   CreatePipe(HANDLE*, HANDLE*, SECURITY_ATTRIBUTES*, DWORD);
 BOOL   SetHandleInformation(HANDLE, DWORD, DWORD);
 BOOL   WriteFile(HANDLE, const void*, DWORD, DWORD*, void*);
-]]
+BOOL   PeekNamedPipe(HANDLE, void*, DWORD, DWORD*, DWORD*, DWORD*);
+BOOL   ReadFile(HANDLE, void*, DWORD, DWORD*, void*);
+HANDLE CreateJobObjectW(void*, const unsigned short*);
+BOOL   SetInformationJobObject(HANDLE, int, void*, DWORD);
+BOOL   AssignProcessToJobObject(HANDLE, HANDLE);
+DWORD  ResumeThread(HANDLE);
+    ]]
 -- END --
 
 -- Constants --
-    local GENERIC_WRITE        = 0x40000000
-    local FILE_SHARE_READ      = 0x00000001
-    local FILE_SHARE_WRITE     = 0x00000002
-    local CREATE_ALWAYS        = 2
-    local FILE_ATTRIBUTE_NORMAL= 0x00000080
     local STARTF_USESTDHANDLES = 0x00000100
+    local CREATE_SUSPENDED     = 0x00000004
     local CREATE_NO_WINDOW     = 0x08000000
     local HANDLE_FLAG_INHERIT  = 0x00000001
-    local STDIN_PIPE_BYTES     = 65536
-    local WAIT_OBJECT_0       = 0
-    local POLL_MS              = 40           -- how often the runloop tails the child
+    local JOB_KILL_ON_CLOSE    = 0x00002000
+    local JOB_EXTENDED_INFO    = 9
+    local PIPE_BYTES           = 1048576
+    local READ_CHUNK           = 65536
+    local TICK_DRAIN_BYTES     = 4194304
+    local WAIT_OBJECT_0        = 0
+    local STREAM_POLL_MS       = 8
+    local IDLE_POLL_MS         = 40
+    local IS_WINDOWS           = package.config:sub(1, 1) == "\\"
+-- END --
 
-    local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+-- Job object that kills every child when the host exits --
+    local job
+    local jobTried = false
 
-    local function tempDir()
-        return (os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or ".")
-            :gsub("[/\\]+$", "")
+    local function childJob()
+        if jobTried then return job end
+
+        jobTried = true
+
+        local h = K.CreateJobObjectW(nil, nil)
+
+        if h == nil then return nil end
+
+        local info = ffi.new("mudtask_JOBEXT")
+
+        info.BasicLimitInformation.LimitFlags = JOB_KILL_ON_CLOSE
+
+        if K.SetInformationJobObject(h, JOB_EXTENDED_INFO, info, ffi.sizeof(info)) == 0 then
+            K.CloseHandle(h)
+
+            return nil
+        end
+
+        job = h
+
+        return job
     end
 -- END --
 
 -- Windows command-line quoting (CommandLineToArgvW rules) --
-    -- Wrap an argument in quotes if empty or containing whitespace/quote; double
-    -- any backslashes that precede a quote, and escape embedded quotes. Enough for
-    -- the flags/URLs/paths mac/ passes; keeps args intact through CreateProcessA.
     local function quoteArg(a)
         a = tostring(a)
+
         if a ~= "" and not a:find('[ \t"]') then return a end
+
         local out, bs = {}, 0
+
         for i = 1, #a do
             local c = a:sub(i, i)
+
             if c == "\\" then
                 bs = bs + 1
             elseif c == '"' then
                 out[#out + 1] = string.rep("\\", bs * 2 + 1) .. '"'
                 bs = 0
             else
-                if bs > 0 then out[#out + 1] = string.rep("\\", bs); bs = 0 end
+                if bs > 0 then
+                    out[#out + 1] = string.rep("\\", bs)
+                    bs = 0
+                end
+
                 out[#out + 1] = c
             end
         end
+
         if bs > 0 then out[#out + 1] = string.rep("\\", bs * 2) end
+
         return '"' .. table.concat(out) .. '"'
     end
 
-    -- Resolve the executable: use the given path verbatim if it opens (a real file
-    -- on this OS); otherwise fall back to the basename so CreateProcess PATH-searches
-    -- (mac's /usr/bin/curl -> curl -> curl.exe on PATH).
+    -- Uses the path verbatim when it opens, else its basename so CreateProcess searches PATH
     local function resolveExe(path)
         local f = io.open(path, "rb")
-        if f then f:close(); return path end
+
+        if f then
+            f:close()
+
+            return path
+        end
+
         return path:match("[^/\\]+$") or path
+    end
+-- END --
+
+-- Anonymous pipes and draining --
+    local readBuf = ffi.new("char[?]", READ_CHUNK)
+    local availN  = ffi.new("DWORD[1]")
+    local gotN    = ffi.new("DWORD[1]")
+
+    -- Returns the parent end and the inheritable child end, or nil on failure
+    local function makePipe(parentReads)
+        local sa = ffi.new("SECURITY_ATTRIBUTES")
+
+        sa.nLength = ffi.sizeof("SECURITY_ATTRIBUTES")
+        sa.lpSecurityDescriptor = nil
+        sa.bInheritHandle = 1
+
+        local rd = ffi.new("HANDLE[1]")
+        local wr = ffi.new("HANDLE[1]")
+
+        if K.CreatePipe(rd, wr, ffi.cast("void*", sa), PIPE_BYTES) == 0 then return nil end
+
+        local parent, child = wr[0], rd[0]
+
+        if parentReads then parent, child = rd[0], wr[0] end
+
+        K.SetHandleInformation(parent, HANDLE_FLAG_INHERIT, 0)
+
+        return parent, child
+    end
+
+    -- Reads what is buffered right now without blocking, up to limit bytes
+    local function drain(h, limit)
+        if not h then return "" end
+
+        local parts, total = {}, 0
+
+        while total < limit do
+            if K.PeekNamedPipe(h, nil, 0, nil, availN, nil) == 0 or availN[0] == 0 then break end
+
+            local want = math.min(tonumber(availN[0]), READ_CHUNK)
+
+            if K.ReadFile(h, readBuf, want, gotN, nil) == 0 or gotN[0] == 0 then break end
+
+            parts[#parts + 1] = ffi.string(readBuf, gotN[0])
+            total = total + tonumber(gotN[0])
+        end
+
+        return table.concat(parts)
+    end
+
+    local function closeHandle(h)
+        if h then K.CloseHandle(h) end
     end
 -- END --
 
@@ -127,51 +218,64 @@ local task = {}
     local Task = {}
     Task.__index = Task
 
-    -- Read whatever a file holds now, from byte offset `from` (0-based). Returns
-    -- the new chunk and the new offset. Missing file => empty chunk.
-    local function readFrom(path, from)
-        local f = io.open(path, "rb")
-        if not f then return "", from end
-        f:seek("set", from)
-        local chunk = f:read("*a") or ""
-        f:close()
-        return chunk, from + #chunk
+    local function fireDone(self, code, stdout, stderr)
+        if not self._doneFn then return end
+
+        local ok, err = pcall(self._doneFn, code, stdout, stderr)
+
+        if not ok then
+            io.stderr:write("hs.task done callback error: " .. tostring(err) .. "\n")
+        end
     end
 
-    -- Finish: read final output, fire doneFn(exitCode, stdout, stderr), clean up.
-    local function finish(self, exitCode)
-        -- Tail any last streamed bytes before the done callback.
-        if self._streamFn then
-            local chunk; chunk, self._outPos = readFrom(self._outPath, self._outPos)
-            if chunk ~= "" then pcall(self._streamFn, self, chunk, "") end
+    -- Moves buffered child output into the accumulators and feeds the stream callback
+    local function pump(self, limit)
+        local out = drain(self._rdOut, limit)
+        local err = drain(self._rdErr, limit)
+
+        if out ~= "" then self._out[#self._out + 1] = out end
+
+        if err ~= "" then self._err[#self._err + 1] = err end
+
+        if self._streamFn and (out ~= "" or err ~= "") then
+            local ok, ret = pcall(self._streamFn, self, out, err)
+
+            if ok and ret == false then self._streamFn = nil end
         end
-        local outAll = (io.open(self._outPath, "rb"))
-        local errAll = (io.open(self._errPath, "rb"))
-        local stdout = outAll and (outAll:read("*a") or "") or ""
-        local stderr = errAll and (errAll:read("*a") or "") or ""
-        if outAll then outAll:close() end
-        if errAll then errAll:close() end
+    end
+
+    -- Drains the last output, closes every handle and fires the done callback
+    local function finish(self, exitCode)
+        pump(self, math.huge)
 
         self:closeInput()
 
-        if self._hProc then K.CloseHandle(self._hProc); self._hProc = nil end
-        if self._hThread then K.CloseHandle(self._hThread); self._hThread = nil end
-        os.remove(self._outPath)
-        os.remove(self._errPath)
+        closeHandle(self._rdOut)
+        closeHandle(self._rdErr)
+        closeHandle(self._hProc)
+        closeHandle(self._hThread)
+
+        self._rdOut = nil
+        self._rdErr = nil
+        self._hProc = nil
+        self._hThread = nil
         self._running = false
 
-        if self._doneFn then
-            local ok, err = pcall(self._doneFn, exitCode, stdout, stderr)
-            if not ok then
-                io.stderr:write("hs.task done callback error: " .. tostring(err) .. "\n")
-            end
-        end
+        local stdout = table.concat(self._out)
+        local stderr = table.concat(self._err)
+
+        self._out = {}
+        self._err = {}
+
+        fireDone(self, exitCode, stdout, stderr)
     end
 
     function Task:start()
         if self._running then return self end
+
         if not IS_WINDOWS then
             io.stderr:write("[hs.task] only implemented on Windows; start() is a no-op here\n")
+
             return nil
         end
 
@@ -183,16 +287,17 @@ local task = {}
             local rc = shims.open(exeArgs)
 
             self._running = true
-            self._handle = host.schedule(POLL_MS, function()
-                if self._handle then self._handle:cancel(); self._handle = nil end
-                self._running = false
-                if self._doneFn then
-                    local ok, err = pcall(self._doneFn, rc, "", "")
-                    if not ok then
-                        io.stderr:write("hs.task done callback error: " .. tostring(err) .. "\n")
-                    end
+            self._handle = host.schedule(IDLE_POLL_MS, function()
+                if self._handle then
+                    self._handle:cancel()
+
+                    self._handle = nil
                 end
-            end, POLL_MS)
+
+                self._running = false
+
+                fireDone(self, rc, "", "")
+            end, IDLE_POLL_MS)
 
             return self
         end
@@ -215,112 +320,111 @@ local task = {}
             end
         end
 
-        local stamp = tostring(os.time()) .. "_" .. tostring(math.random(1, 1e9))
-        self._outPath = tempDir() .. "/hammerspoon_task_" .. stamp .. ".out"
-        self._errPath = tempDir() .. "/hammerspoon_task_" .. stamp .. ".err"
-        self._outPos  = 0
+        local rdOut, wrOut = makePipe(true)
+        local rdErr, wrErr = makePipe(true)
+        local wrIn, rdIn = makePipe(false)
 
-        -- Inheritable temp-file handles for the child's stdout/stderr.
-        local sa = ffi.new("SECURITY_ATTRIBUTES")
-        sa.nLength = ffi.sizeof("SECURITY_ATTRIBUTES")
-        sa.lpSecurityDescriptor = nil
-        sa.bInheritHandle = 1
+        if not (rdOut and rdErr and wrIn) then
+            closeHandle(rdOut)
+            closeHandle(wrOut)
+            closeHandle(rdErr)
+            closeHandle(wrErr)
+            closeHandle(wrIn)
+            closeHandle(rdIn)
 
-        local shareRW = bit.bor(FILE_SHARE_READ, FILE_SHARE_WRITE)
-        local hOut = K.CreateFileA(self._outPath, GENERIC_WRITE, shareRW, sa,
-            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nil)
-        local hErr = K.CreateFileA(self._errPath, GENERIC_WRITE, shareRW, sa,
-            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nil)
-        local INVALID = ffi.cast("HANDLE", ffi.cast("intptr_t", -1))
-        if hOut == INVALID or hErr == INVALID then
-            if hOut ~= INVALID then K.CloseHandle(hOut) end
-            if hErr ~= INVALID then K.CloseHandle(hErr) end
             return nil
         end
 
-        -- Build the command line: quoted exe + quoted args.
         local parts = { quoteArg(resolveExe(exePath)) }
+
         for _, a in ipairs(exeArgs) do parts[#parts + 1] = quoteArg(a) end
+
         local cmdline = table.concat(parts, " ")
-        -- CreateProcessA may modify lpCommandLine in place, so pass a writable copy.
         local cmdbuf = ffi.new("char[?]", #cmdline + 1)
+
         ffi.copy(cmdbuf, cmdline)
 
-        local inRead = ffi.new("HANDLE[1]")
-        local inWrite = ffi.new("HANDLE[1]")
-
-        if K.CreatePipe(inRead, inWrite, nil, STDIN_PIPE_BYTES) == 0 then
-            K.CloseHandle(hOut)
-            K.CloseHandle(hErr)
-            return nil
-        end
-
-        K.SetHandleInformation(inRead[0], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
-
         local si = ffi.new("STARTUPINFOA")
+
         si.cb = ffi.sizeof("STARTUPINFOA")
         si.dwFlags = STARTF_USESTDHANDLES
-        si.hStdInput = inRead[0]
-        si.hStdOutput = hOut
-        si.hStdError = hErr
+        si.hStdInput = rdIn
+        si.hStdOutput = wrOut
+        si.hStdError = wrErr
 
         local pi = ffi.new("PROCESS_INFORMATION")
 
         local ok = K.CreateProcessA(nil, cmdbuf, nil, nil, true,
-            CREATE_NO_WINDOW, nil, nil, si, pi)
+            bit.bor(CREATE_NO_WINDOW, CREATE_SUSPENDED), nil, nil, si, pi)
 
-        K.CloseHandle(hOut)
-
-        K.CloseHandle(hErr)
-
-        K.CloseHandle(inRead[0])
+        closeHandle(wrOut)
+        closeHandle(wrErr)
+        closeHandle(rdIn)
 
         if ok == 0 then
-            K.CloseHandle(inWrite[0])
+            closeHandle(rdOut)
+            closeHandle(rdErr)
+            closeHandle(wrIn)
 
-            os.remove(self._outPath)
-            os.remove(self._errPath)
             return nil
         end
 
-        self._stdin   = inWrite[0]
+        local hJob = childJob()
+
+        if hJob then K.AssignProcessToJobObject(hJob, pi.hProcess) end
+
+        K.ResumeThread(pi.hThread)
+
+        self._rdOut   = rdOut
+        self._rdErr   = rdErr
+        self._stdin   = wrIn
         self._hProc   = pi.hProcess
         self._hThread = pi.hThread
+        self._out     = {}
+        self._err     = {}
         self._running = true
 
-        -- Poll for exit (and tail stdout for streaming tasks) off the one runloop.
-        self._handle = host.schedule(POLL_MS, function()
+        local pollMs = self._streamFn and STREAM_POLL_MS or IDLE_POLL_MS
+
+        self._handle = host.schedule(pollMs, function()
             if not self._running then return end
-            if self._streamFn then
-                local chunk; chunk, self._outPos = readFrom(self._outPath, self._outPos)
-                if chunk ~= "" then
-                    -- hs contract: the streaming callback returns true to keep receiving
-                    -- output, false to stop. pcall's 1st result is its own ok flag, so we
-                    -- must read the 2nd (the callback's return). On an explicit false we
-                    -- drop the streamFn -- no more stream callbacks -- while still polling
-                    -- for exit so the done callback and cleanup still fire.
-                    local ok, ret = pcall(self._streamFn, self, chunk, "")
-                    if ok and ret == false then self._streamFn = nil end
-                end
-            end
-            if self._hProc and K.WaitForSingleObject(self._hProc, 0) == WAIT_OBJECT_0 then
+
+            local exited = self._hProc and K.WaitForSingleObject(self._hProc, 0) == WAIT_OBJECT_0
+
+            pump(self, TICK_DRAIN_BYTES)
+
+            if exited and self._running then
                 local code = ffi.new("DWORD[1]")
+
                 K.GetExitCodeProcess(self._hProc, code)
-                if self._handle then self._handle:cancel(); self._handle = nil end
+
+                if self._handle then
+                    self._handle:cancel()
+
+                    self._handle = nil
+                end
+
                 finish(self, tonumber(code[0]))
             end
-        end, POLL_MS)
+        end, pollMs)
 
         return self
     end
 
-    -- Kill the child and tear down. Fires the done callback with the kill code so
-    -- callers waiting on it aren't left hanging.
+    -- Kills the child and fires the done callback with code -1
     function Task:terminate()
         if not self._running then return self end
+
         if self._hProc then pcall(function() K.TerminateProcess(self._hProc, 1) end) end
-        if self._handle then self._handle:cancel(); self._handle = nil end
+
+        if self._handle then
+            self._handle:cancel()
+
+            self._handle = nil
+        end
+
         finish(self, -1)
+
         return self
     end
 
@@ -354,23 +458,23 @@ local task = {}
     -- END Task:closeInput --
 -- END --
 
--- new --
-    -- new(path, doneFn, streamFnOrArgs[, argsTable]). The 3rd arg is a streaming
-    -- callback when it's a function, or the argument array when it's a table.
+-- new(path, doneFn, streamFnOrArgs[, argsTable]) --
     function task.new(path, doneFn, third, fourth)
         local streamFn, args
+
         if type(third) == "function" then
             streamFn = third
             args     = fourth
         elseif type(third) == "table" then
-            args     = third
+            args = third
         end
+
         return setmetatable({
-            _path     = path,
-            _doneFn   = doneFn,
+            _path = path,
+            _doneFn = doneFn,
             _streamFn = streamFn,
-            _args     = args or {},
-            _running  = false,
+            _args = args or {},
+            _running = false
         }, Task)
     end
 -- END --

@@ -368,6 +368,7 @@ local host = {
     -- kind and removed when the last one leaves, so an idle host holds no hook.
     local keySubs   = {}
     local mouseSubs = {}
+    local externalOwner = false
     local keyHook, mouseHook            -- HHOOK handles (nil when not installed)
     local keyProc,  mouseProc           -- ffi callbacks; created ONCE, kept for the
                                         -- process lifetime (see installKeyHook). GC
@@ -519,6 +520,22 @@ local host = {
         vkToMac = (ok and kc and kc.vkToMac) or function(vk) return vk end
     end
 
+    -- External owner extension --
+        -- dwExtraInfo value an external input daemon stamps on its own injections
+        local EXTERNAL_SIGNATURE = 999
+        local rehookFn
+
+        -- Schedules the registered rehook callback on the runloop
+        local function notifyRehook()
+            if not rehookFn then return end
+
+            schedule(0, function()
+                local fn = rehookFn
+                if fn then pcall(fn) end
+            end)
+        end
+    -- END --
+
     local function installKeyHook()
         -- Create the ffi callback ONCE and reuse it across every install/uninstall
         -- cycle. UnhookWindowsHookEx does not guarantee no further calls: the OS can
@@ -545,6 +562,8 @@ local host = {
                         and down(VK_CONTROL) and down(VK_MENU) then
                         pcall(host.panic, "hotkey")
                     end
+                    if externalOwner and extra == EXTERNAL_SIGNATURE then return false end
+
                     -- Autorepeat: a keyDown for a key already held (no keyUp since) is
                     -- a hardware repeat. Update held-state off the raw down/up type,
                     -- before t is possibly rewritten to flagsChanged below.
@@ -591,6 +610,8 @@ local host = {
         end
         keyHook = U.SetWindowsHookExA(WH_KEYBOARD_LL, keyProc, host.moduleHandle, 0)
         if keyHook == nil then error("SetWindowsHookExA (keyboard) failed") end
+
+        notifyRehook()
     end
 
     local function installMouseHook()
@@ -602,6 +623,8 @@ local host = {
             if nCode >= 0 then
                 local wp = tonumber(wParam)
                 local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
+                if externalOwner and tonumber(ms.dwExtraInfo) == EXTERNAL_SIGNATURE then return false end
+
                 -- WM_MOUSEWHEEL packs the signed delta in the high word of mouseData;
                 -- WM_XBUTTON* packs the thumb-button id (XBUTTON1=1, XBUTTON2=2) there.
                 local hiword = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
@@ -659,16 +682,19 @@ local host = {
         end
         mouseHook = U.SetWindowsHookExA(WH_MOUSE_LL, mouseProc, host.moduleHandle, 0)
         if mouseHook == nil then error("SetWindowsHookExA (mouse) failed") end
+
+        notifyRehook()
     end
 
     local function subscribe(subs, install, uninstall, fn)
         subs[#subs + 1] = fn
         if #subs == 1 then install() end
+
         return function()
             for i = #subs, 1, -1 do
                 if subs[i] == fn then table.remove(subs, i) break end
             end
-            if #subs == 0 then uninstall() end
+            if #subs == 0 and not externalOwner then uninstall() end
         end
     end
 
@@ -682,12 +708,44 @@ local host = {
         if mouseHook then U.UnhookWindowsHookEx(mouseHook); mouseHook = nil end
     end
 
+    local function ensureKeyHook()
+        if not keyHook then installKeyHook() end
+    end
+
+    local function ensureMouseHook()
+        if not mouseHook then installMouseHook() end
+    end
+
     function host.onKey(fn)
-        return subscribe(keySubs, installKeyHook, uninstallKeyHook, fn)
+        return subscribe(keySubs, ensureKeyHook, uninstallKeyHook, fn)
     end
+
     function host.onMouse(fn)
-        return subscribe(mouseSubs, installMouseHook, uninstallMouseHook, fn)
+        return subscribe(mouseSubs, ensureMouseHook, uninstallMouseHook, fn)
     end
+
+    -- External owner extension --
+        -- Turns external-owner mode on or off. On keeps both hooks installed and
+        -- hides the daemon's own injections from subscribers. Off drops idle hooks.
+        function host.setExternalOwner(on)
+            externalOwner = on and true or false
+
+            if externalOwner then
+                ensureKeyHook()
+                ensureMouseHook()
+                return
+            end
+
+            if #keySubs == 0 then uninstallKeyHook() end
+
+            if #mouseSubs == 0 then uninstallMouseHook() end
+        end
+
+        -- Registers fn (nil clears) to run on the runloop after each hook install
+        function host.onRehook(fn)
+            rehookFn = fn
+        end
+    -- END --
 
     -- WinEvent source, fn(event, hwnd, idObject, idChild)
     local winSubs  = {}

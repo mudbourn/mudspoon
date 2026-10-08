@@ -169,6 +169,35 @@ if (Test-Path $readerSrc) {
     Write-Host "deploy: no win\bin\ms_gc_read.exe yet (build with win\bin\build.bat to enable controller input); skipping."
 }
 
+# 6c. Layer daemon: build when stale, then install
+$layerDir = Join-Path $Repo 'native\ms_layer'
+$layerExe = Join-Path $layerDir 'target\release\ms_layer.exe'
+if ((Test-Path (Join-Path $layerDir 'Cargo.toml')) -and (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    $layerStale = -not (Test-Path $layerExe)
+    if (-not $layerStale) {
+        $exeTime = (Get-Item $layerExe).LastWriteTimeUtc
+        $newer = Get-ChildItem (Join-Path $layerDir 'src') -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTimeUtc -gt $exeTime } | Select-Object -First 1
+        $layerStale = $null -ne $newer
+    }
+    if ($layerStale) {
+        Write-Host "deploy: building ms_layer (cargo build --release)"
+        & cargo build --release --manifest-path (Join-Path $layerDir 'Cargo.toml')
+        if ($LASTEXITCODE -ne 0) { Write-Warning "deploy: cargo build of ms_layer failed; using any existing binary." }
+    }
+}
+if (Test-Path $layerExe) {
+    New-Item -ItemType Directory -Force -Path $localBin | Out-Null
+    try {
+        Copy-File $layerExe (Join-Path $localBin 'ms_layer.exe')
+        Write-Host "deploy: layer daemon -> $localBin\ms_layer.exe"
+    } catch {
+        Write-Warning "deploy: could not replace $localBin\ms_layer.exe (daemon running?). Stop ms_layer and redeploy to update it."
+    }
+} else {
+    Write-Host "deploy: no native\ms_layer\target\release\ms_layer.exe yet (cargo build --release in native\ms_layer); skipping."
+}
+
 # 7. Build number (resets when stable version changes) — mirrors deploy.sh.
 $dataDir = Join-Path $HS 'data'
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Force -Path $dataDir | Out-Null }
