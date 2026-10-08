@@ -157,13 +157,25 @@ UINT MapVirtualKeyW(UINT, UINT);
         mi.dwExtraInfo = extra or MAGIC
     end
 
+    -- True while the previous send came up short, so a burst logs once
+    local sendFailing = false
+
     -- Materialise a sequence of fill-closures into one INPUT[n] and send it atomically.
     local function send(fills)
         local n = #fills
         if n == 0 then return end
         local arr = ffi.new("INPUT[?]", n)
         for i = 1, n do fills[i](arr[i - 1]) end
-        U.SendInput(n, arr, ffi.sizeof("INPUT"))
+        local sent = U.SendInput(n, arr, ffi.sizeof("INPUT"))
+        if sent < n then
+            local err = ffi.errno()
+            if not sendFailing then
+                io.stderr:write("hammerspoon: SendInput sent " .. sent .. " of " .. n .. " events, error " .. tostring(err) .. "\n")
+            end
+            sendFailing = true
+        else
+            sendFailing = false
+        end
     end
 -- END --
 

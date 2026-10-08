@@ -29,10 +29,12 @@ canvas follows the `jit.off(wndProc)` + kept-cast pattern, and the real fix is
 
 ## LIVE gaps (pile-3), triaged least-obvious → most-worth-fixing-first
 
-1. **eventtap `keyboardEventAutorepeat` never populated** — `foundation.lua:373-377`
-   sets scanCode/injected/extra but never `autorepeat`; read at `ms_core.lua:1126`.
-   `isRepeat` always false → held-key hardware autorepeat re-fires binding
-   `pressFn`. Silent, hot-path.
+1. **eventtap `keyboardEventAutorepeat` is derived, not native** -- the
+   low-level hook gives no repeat flag, so `foundation.lua` marks a hardware
+   keyDown as autorepeat when its vk is already held without a keyUp. Injected
+   events are tracked in a separate set and never count as hardware repeats, so a
+   synthetic keyUp does not make the next hardware repeat look like a fresh press.
+   Panic releases both sets.
 2. **application `:name()` caches transient failure permanently** —
    `application.lua:87-92`: `self._name = b or false`, returns `_name or nil`
    forever. One `imagePath` race strands name at nil; name is the app-resolution

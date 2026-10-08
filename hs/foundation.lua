@@ -382,6 +382,21 @@ local host = {
     -- A keyDown for a vk already marked held is a repeat -> keyboardEventAutorepeat.
     local keyHeld = {}
 
+    -- Keys our own injections hold down, kept apart so a synthetic keyUp never
+    -- clears the hardware held state. Panic releases both sets.
+    local injHeld = {}
+
+    -- The held view eventFlags reads: hardware keys plus injected keys
+    local function heldView()
+        if next(injHeld) == nil then return keyHeld end
+
+        local merged = {}
+        for vk in pairs(keyHeld) do merged[vk] = true end
+        for vk in pairs(injHeld) do merged[vk] = true end
+
+        return merged
+    end
+
     -- Which button each down/up message owns, and the drag type to emit while it
     -- is held. Highest-priority held button (left > right > other) names the drag,
     -- mirroring hs, which reports one *Dragged type per move.
@@ -443,7 +458,8 @@ local host = {
 
             local kb = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
             local vk = tonumber(kb.vkCode)
-            keyHeld[vk] = (t == "keyDown") or nil
+            local set = bit.band(kb.flags, LLKHF_INJECTED) ~= 0 and injHeld or keyHeld
+            set[vk] = (t == "keyDown") or nil
         end
 
         -- Keeps held-button state current for an event that bypasses the subscribers
@@ -500,9 +516,13 @@ local host = {
     function host.panic(reason)
         local heldKeys = {}
         for vk in pairs(keyHeld) do heldKeys[#heldKeys + 1] = vk end
+        for vk in pairs(injHeld) do
+            if not keyHeld[vk] then heldKeys[#heldKeys + 1] = vk end
+        end
         local heldBtns = {}
         for b = 0, 4 do if btnHeld[b] then heldBtns[#heldBtns + 1] = b end end
         for vk in pairs(keyHeld) do keyHeld[vk] = nil end
+        for vk in pairs(injHeld) do injHeld[vk] = nil end
         for b = 0, 4 do btnHeld[b] = false end
         local snap = {
             keys    = heldKeys,
@@ -556,14 +576,16 @@ local host = {
                         return false
                     end
 
+                    local injected = bit.band(kb.flags, LLKHF_INJECTED) ~= 0
+                    local set = injected and injHeld or keyHeld
                     local autorepeat = false
                     if t == "keyDown" then
-                        autorepeat = keyHeld[vk] == true
-                        keyHeld[vk] = true
+                        autorepeat = not injected and keyHeld[vk] == true
+                        set[vk] = true
                     elseif t == "keyUp" then
-                        keyHeld[vk] = nil
+                        set[vk] = nil
                     end
-                    local flags = eventFlags(vk, t == "keyDown", keyHeld)
+                    local flags = eventFlags(vk, t == "keyDown", heldView())
 
                     -- Modifier transition as flagsChanged
                     if MODIFIER_VK[vk] then t = "flagsChanged" end
@@ -574,7 +596,7 @@ local host = {
                         flags   = flags,
                         props   = {
                             scanCode   = tonumber(kb.scanCode),
-                            injected   = bit.band(kb.flags, LLKHF_INJECTED) ~= 0,
+                            injected   = injected,
                             autorepeat = autorepeat,
                             extra      = extra,
                         },

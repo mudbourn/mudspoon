@@ -223,6 +223,8 @@ Add-Type -AssemblyName System.Drawing
 
     $templates = Join-Path $Mudscript "mac\templates"
     Copy-Item $templates (Join-Path $hs "templates") -Recurse -Force
+
+    Copy-Item (Join-Path $templates "ms_macros.lua") (Join-Path $hs "ms_macros.lua") -Force
 # END #
 
 # Compile #
