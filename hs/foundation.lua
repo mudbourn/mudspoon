@@ -360,19 +360,15 @@ local host = {
 -- END --
 
 -- Host Dispatch (the dispatch contract) --
-    -- host.onKey(fn) / host.onMouse(fn) -> unsubscribe handle (call it to remove).
-    -- fn receives an event object. Returning true swallows the event: the OS
-    -- never sees it and later subscribers do not run.
-    --
-    -- The underlying low-level hook is installed on the first subscriber of its
-    -- kind and removed when the last one leaves, so an idle host holds no hook.
     local keySubs   = {}
     local mouseSubs = {}
     local externalOwner = false
-    local keyHook, mouseHook            -- HHOOK handles (nil when not installed)
-    local keyProc,  mouseProc           -- ffi callbacks; created ONCE, kept for the
-                                        -- process lifetime (see installKeyHook). GC
-                                        -- of a live LL callback = "bad callback" panic.
+
+    -- HHOOK handles, nil when not installed
+    local keyHook, mouseHook
+
+    -- ffi callbacks, created once and kept for the process lifetime
+    local keyProc, mouseProc
 
     -- keyboard message -> event type
     local KEY_TYPE = {
@@ -414,6 +410,9 @@ local host = {
         [WM_MOUSEHWHEEL] = { "scrollWheel" },
     }
 
+    -- dwExtraInfo value an external input daemon stamps on its own injections
+    local EXTERNAL_SIGNATURE = 999
+
     -- Sync wait --
         -- Count of synchronous waits in progress. While it is above zero the hook
         -- procs run no subscriber and only keep held state current.
@@ -442,7 +441,8 @@ local host = {
             local t = KEY_TYPE[tonumber(wParam)]
             if not t then return end
 
-            local vk = tonumber(ffi.cast("KBDLLHOOKSTRUCT*", lParam).vkCode)
+            local kb = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
+            local vk = tonumber(kb.vkCode)
             keyHeld[vk] = (t == "keyDown") or nil
         end
 
@@ -451,8 +451,9 @@ local host = {
             if nCode < 0 then return end
 
             local wp = tonumber(wParam)
+            local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
+
             if wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP then
-                local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
                 local hiword = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
                 btnHeld[2 + bit.band(hiword, 0xFFFF)] = (wp == WM_XBUTTONDOWN)
                 return
@@ -521,8 +522,6 @@ local host = {
     end
 
     -- External owner extension --
-        -- dwExtraInfo value an external input daemon stamps on its own injections
-        local EXTERNAL_SIGNATURE = 999
         local rehookFn
 
         -- Schedules the registered rehook callback on the runloop
@@ -537,17 +536,8 @@ local host = {
     -- END --
 
     local function installKeyHook()
-        -- Create the ffi callback ONCE and reuse it across every install/uninstall
-        -- cycle. UnhookWindowsHookEx does not guarantee no further calls: the OS can
-        -- deliver one more LL callback that was already in flight, so the callback
-        -- must outlive the hook. Freeing it (the old keyProc=nil on uninstall) let
-        -- GC collect it and a late OS call hit freed memory -> "bad callback" panic,
-        -- intermittently, whenever bind setup thrashed the hook while input flowed.
         if not keyProc then
-        -- The hook body is a plain Lua function (not the FFI callback itself) so it
-        -- can be jit.off'd and driven under pcall: an error must NEVER unwind out of
-        -- the ffi.cast callback across the OS-hook boundary. Under the JIT that unwind
-        -- lands in the middle of a compiled trace's mcode -> "PANIC: ... bad callback".
+        -- Key hook body, run under pcall with the JIT off
         local function keyBody(nCode, wParam, lParam)
             local swallow = false
             if nCode >= 0 then
@@ -556,17 +546,16 @@ local host = {
                     local kb    = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
                     local extra = tonumber(kb.dwExtraInfo)
                     local vk    = tonumber(kb.vkCode)
-                    -- Emergency stop: Ctrl+Alt+Pause (or Ctrl+Alt+Break) releases held
-                    -- synthetic input and cancels running work, then passes through.
                     if t == "keyDown" and (vk == VK_PAUSE or vk == VK_CANCEL)
                         and down(VK_CONTROL) and down(VK_MENU) then
                         pcall(host.panic, "hotkey")
                     end
-                    if externalOwner and extra == EXTERNAL_SIGNATURE then return false end
+                    if externalOwner and extra == EXTERNAL_SIGNATURE then
+                        trackKey(nCode, wParam, lParam)
 
-                    -- Autorepeat: a keyDown for a key already held (no keyUp since) is
-                    -- a hardware repeat. Update held-state off the raw down/up type,
-                    -- before t is possibly rewritten to flagsChanged below.
+                        return false
+                    end
+
                     local autorepeat = false
                     if t == "keyDown" then
                         autorepeat = keyHeld[vk] == true
@@ -616,14 +605,17 @@ local host = {
 
     local function installMouseHook()
         if not mouseProc then
-        -- See keyBody above: jit.off'd body under pcall so no Lua error can unwind
-        -- out of the ffi.cast callback across the OS-hook boundary ("bad callback").
+        -- Mouse hook body, run under pcall with the JIT off
         local function mouseBody(nCode, wParam, lParam)
             local swallow = false
             if nCode >= 0 then
                 local wp = tonumber(wParam)
                 local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
-                if externalOwner and tonumber(ms.dwExtraInfo) == EXTERNAL_SIGNATURE then return false end
+                if externalOwner and tonumber(ms.dwExtraInfo) == EXTERNAL_SIGNATURE then
+                    trackMouse(nCode, wParam, lParam)
+
+                    return false
+                end
 
                 -- WM_MOUSEWHEEL packs the signed delta in the high word of mouseData;
                 -- WM_XBUTTON* packs the thumb-button id (XBUTTON1=1, XBUTTON2=2) there.
@@ -698,14 +690,22 @@ local host = {
         end
     end
 
-    -- Remove the OS hook but KEEP keyProc/mouseProc alive (see installKeyHook): a
-    -- late in-flight LL call after UnhookWindowsHookEx must land on a live callback,
-    -- not freed memory. The kept callback just falls through to CallNextHookEx.
+    -- Removes the OS hook and keeps keyProc alive
     local function uninstallKeyHook()
-        if keyHook then U.UnhookWindowsHookEx(keyHook); keyHook = nil end
+        if keyHook then
+            U.UnhookWindowsHookEx(keyHook)
+
+            keyHook = nil
+        end
     end
+
+    -- Removes the OS hook and keeps mouseProc alive
     local function uninstallMouseHook()
-        if mouseHook then U.UnhookWindowsHookEx(mouseHook); mouseHook = nil end
+        if mouseHook then
+            U.UnhookWindowsHookEx(mouseHook)
+
+            mouseHook = nil
+        end
     end
 
     local function ensureKeyHook()
@@ -725,8 +725,7 @@ local host = {
     end
 
     -- External owner extension --
-        -- Turns external-owner mode on or off. On keeps both hooks installed and
-        -- hides the daemon's own injections from subscribers. Off drops idle hooks.
+        -- Turns external-owner mode on or off
         function host.setExternalOwner(on)
             externalOwner = on and true or false
 

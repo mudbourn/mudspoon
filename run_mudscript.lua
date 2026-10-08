@@ -455,7 +455,19 @@
         return false
     end
 
+    -- Runs hs.shutdownCallback once under pcall, then clears it
+    local function runShutdownCallback()
+        local cb = hs.shutdownCallback
+        hs.shutdownCallback = nil
+        if type(cb) ~= "function" then return end
+
+        local okcb, cberr = pcall(cb)
+        if not okcb then io.stderr:write("hs.shutdownCallback error: " .. tostring(cberr) .. "\n") end
+    end
+
     function hs.reload()
+        runShutdownCallback()
+
         -- Evict config modules so require() re-reads them from disk on re-run.
         local evicted = {}
         for name in pairs(package.loaded) do
@@ -517,7 +529,9 @@
     -- host. Waiting first keeps the single-instance guard from evicting the newcomer.
     if package.config:sub(1, 1) == "\\" then
         hs.relaunch = function()
-            local pid     = (hs.processInfo and hs.processInfo.processID) or 0
+            runShutdownCallback()
+
+            local pid    = (hs.processInfo and hs.processInfo.processID) or 0
             local mainDir = (arg[0] or "run_mudscript.lua"):gsub("[^/\\]*$", "")
             local script  = hsDir .. "/data/.ms_relaunch.ps1"
 

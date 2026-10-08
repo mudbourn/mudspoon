@@ -172,11 +172,15 @@ if (Test-Path $readerSrc) {
 # 6c. Layer daemon: build when stale, then install
 $layerDir = Join-Path $Repo 'native\ms_layer'
 $layerExe = Join-Path $layerDir 'target\release\ms_layer.exe'
+$layerDest = Join-Path $localBin 'ms_layer.exe'
+Remove-Item "$layerDest.old" -Force -ErrorAction SilentlyContinue
 if ((Test-Path (Join-Path $layerDir 'Cargo.toml')) -and (Get-Command cargo -ErrorAction SilentlyContinue)) {
     $layerStale = -not (Test-Path $layerExe)
     if (-not $layerStale) {
         $exeTime = (Get-Item $layerExe).LastWriteTimeUtc
-        $newer = Get-ChildItem (Join-Path $layerDir 'src') -Recurse -File -ErrorAction SilentlyContinue |
+        $layerInputs = @(Get-ChildItem (Join-Path $layerDir 'src') -Recurse -File -ErrorAction SilentlyContinue)
+        $layerInputs += Get-Item (Join-Path $layerDir 'Cargo.toml'), (Join-Path $layerDir 'Cargo.lock') -ErrorAction SilentlyContinue
+        $newer = $layerInputs |
             Where-Object { $_.LastWriteTimeUtc -gt $exeTime } | Select-Object -First 1
         $layerStale = $null -ne $newer
     }
@@ -189,8 +193,12 @@ if ((Test-Path (Join-Path $layerDir 'Cargo.toml')) -and (Get-Command cargo -Erro
 if (Test-Path $layerExe) {
     New-Item -ItemType Directory -Force -Path $localBin | Out-Null
     try {
-        Copy-File $layerExe (Join-Path $localBin 'ms_layer.exe')
-        Write-Host "deploy: layer daemon -> $localBin\ms_layer.exe"
+        if (Test-Path $layerDest) {
+            try { Copy-File $layerExe $layerDest } catch { Move-Item $layerDest "$layerDest.old" -Force; Copy-File $layerExe $layerDest }
+        } else {
+            Copy-File $layerExe $layerDest
+        }
+        Write-Host "deploy: layer daemon -> $layerDest"
     } catch {
         Write-Warning "deploy: could not replace $localBin\ms_layer.exe (daemon running?). Stop ms_layer and redeploy to update it."
     }

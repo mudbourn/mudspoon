@@ -61,6 +61,7 @@ BOOL   CloseHandle(HANDLE);
 BOOL   CreatePipe(HANDLE*, HANDLE*, SECURITY_ATTRIBUTES*, DWORD);
 BOOL   SetHandleInformation(HANDLE, DWORD, DWORD);
 BOOL   WriteFile(HANDLE, const void*, DWORD, DWORD*, void*);
+BOOL   SetNamedPipeHandleState(HANDLE, DWORD*, DWORD*, DWORD*);
 BOOL   PeekNamedPipe(HANDLE, void*, DWORD, DWORD*, DWORD*, DWORD*);
 BOOL   ReadFile(HANDLE, void*, DWORD, DWORD*, void*);
 HANDLE CreateJobObjectW(void*, const unsigned short*);
@@ -78,6 +79,8 @@ DWORD  ResumeThread(HANDLE);
     local JOB_KILL_ON_CLOSE    = 0x00002000
     local JOB_EXTENDED_INFO    = 9
     local PIPE_BYTES           = 1048576
+    local PIPE_NOWAIT          = 0x00000001
+    local nowaitMode           = ffi.new("DWORD[1]", PIPE_NOWAIT)
     local READ_CHUNK           = 65536
     local TICK_DRAIN_BYTES     = 4194304
     local WAIT_OBJECT_0        = 0
@@ -244,11 +247,44 @@ local task = {}
         end
     end
 
+    -- Writes what the stdin pipe accepts now, closing it once the backlog is empty and a close is pending
+    local function flushInput(self)
+        local stdin = self._stdin
+
+        if not stdin then return end
+
+        local pending = self._pending
+
+        while pending and #pending > 0 do
+            local wrote = ffi.new("DWORD[1]")
+
+            if K.WriteFile(stdin, pending, #pending, wrote, nil) == 0 or wrote[0] == 0 then break end
+
+            pending = pending:sub(tonumber(wrote[0]) + 1)
+        end
+
+        self._pending = pending
+
+        if self._inputClosing and (not pending or #pending == 0) then
+            K.CloseHandle(stdin)
+
+            self._stdin = nil
+            self._pending = nil
+        end
+    end
+
     -- Drains the last output, closes every handle and fires the done callback
     local function finish(self, exitCode)
         pump(self, math.huge)
 
-        self:closeInput()
+        if self._stdin then
+            K.CloseHandle(self._stdin)
+
+            self._stdin = nil
+        end
+
+        self._pending = nil
+        self._inputClosing = nil
 
         closeHandle(self._rdOut)
         closeHandle(self._rdErr)
@@ -326,14 +362,21 @@ local task = {}
 
         if not (rdOut and rdErr and wrIn) then
             closeHandle(rdOut)
+
             closeHandle(wrOut)
+
             closeHandle(rdErr)
+
             closeHandle(wrErr)
+
             closeHandle(wrIn)
+
             closeHandle(rdIn)
 
             return nil
         end
+
+        K.SetNamedPipeHandleState(wrIn, nowaitMode, nil, nil)
 
         local parts = { quoteArg(resolveExe(exePath)) }
 
@@ -358,12 +401,16 @@ local task = {}
             bit.bor(CREATE_NO_WINDOW, CREATE_SUSPENDED), nil, nil, si, pi)
 
         closeHandle(wrOut)
+
         closeHandle(wrErr)
+
         closeHandle(rdIn)
 
         if ok == 0 then
             closeHandle(rdOut)
+
             closeHandle(rdErr)
+
             closeHandle(wrIn)
 
             return nil
@@ -382,6 +429,8 @@ local task = {}
         self._hThread = pi.hThread
         self._out     = {}
         self._err     = {}
+        self._pending = nil
+        self._inputClosing = nil
         self._running = true
 
         local pollMs = self._streamFn and STREAM_POLL_MS or IDLE_POLL_MS
@@ -392,6 +441,8 @@ local task = {}
             local exited = self._hProc and K.WaitForSingleObject(self._hProc, 0) == WAIT_OBJECT_0
 
             pump(self, TICK_DRAIN_BYTES)
+
+            flushInput(self)
 
             if exited and self._running then
                 local code = ffi.new("DWORD[1]")
@@ -434,12 +485,11 @@ local task = {}
 
     -- Task:setInput --
         function Task:setInput(data)
-            if not self._stdin then return self end
+            if not self._stdin or self._inputClosing then return self end
 
-            local s = tostring(data)
-            local wrote = ffi.new("DWORD[1]")
+            self._pending = (self._pending or "") .. tostring(data)
 
-            K.WriteFile(self._stdin, s, #s, wrote, nil)
+            flushInput(self)
 
             return self
         end
@@ -447,11 +497,11 @@ local task = {}
 
     -- Task:closeInput --
         function Task:closeInput()
-            if self._stdin then
-                K.CloseHandle(self._stdin)
+            if not self._stdin then return true end
 
-                self._stdin = nil
-            end
+            self._inputClosing = true
+
+            flushInput(self)
 
             return true
         end
