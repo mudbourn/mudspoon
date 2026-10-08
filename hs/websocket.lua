@@ -69,7 +69,7 @@ int    select(int, ws_fd_set*, ws_fd_set*, ws_fd_set*, const ws_timeval*);
     local AF_INET        = 2
     local SOCK_STREAM    = 1
     local IPPROTO_TCP    = 6
-    local FIONBIO        = 0x8004667E   -- ioctlsocket: toggle non-blocking mode
+    local FIONBIO        = bit.tobit(0x8004667E)
     local WSAEWOULDBLOCK = 10035
     local SOCKET_ERROR   = -1
     local INVALID_SOCKET = ffi.cast("SOCKET", ffi.cast("intptr_t", -1))

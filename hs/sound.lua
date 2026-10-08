@@ -1,39 +1,11 @@
--- hs.sound  (Win32, one helper process per sound -- mixes, never stalls input) --
-    -- Hammerspoon's hs.sound plays an NSSound. mudscript drives it through ms.sound /
-    -- ms.playSlot:
-    --   hs.sound.getByFile(path) or hs.sound.getByName(path)  -> sound | nil
-    --   sound:volume(0..1) : sound:play() : sound:stop()
-    --   sound:setCallback(fn)  -- fn(sound,"stop") when playback ends (drives the
-    --                             coroutine-resume path in ms.sound's synchronous mode)
-    --
-    -- WHY A HELPER PROCESS -- the mouse-stall fix that still mixes:
-    --   The low-level input hooks (hs.foundation's WH_MOUSE_LL / WH_KEYBOARD_LL) run ON
-    --   THE PUMP THREAD, and Windows stalls system-wide input whenever that thread is
-    --   blocked past LowLevelHooksTimeout. Every Windows audio call that can MIX sounds
-    --   (MCI) is synchronous and costs 15-45ms per command on the pump thread -- so an
-    --   in-process MCI backend hitched the mouse. The one instant call, PlaySound, is
-    --   single-stream PER PROCESS, so in-process it could not overlap sounds (a new one
-    --   cut the previous).
-    --
-    --   The escape from that bind: play each sound in its OWN short-lived child process
-    --   (hs.soundhelper, run by this same luajit.exe). The child blocks on PlaySound; the
-    --   host thread only pays a CreateProcess (~1-5ms), so input never stalls. And because
-    --   PlaySound's single-stream limit is per PROCESS, N concurrent children = N streams
-    --   the OS mixes -- overlap is back. A sound cutting only ITS OWN prior instance falls
-    --   out naturally: ms.playSlot :stop()s the previous handle, which terminates that one
-    --   child; a different sound is a different child and plays alongside.
-    --
-    --   Cost of the trade: ~20-40ms of process+interpreter startup before a sound is
-    --   audible, and one transient process per sfx. Accepted to keep input responsive.
-    --
-    -- END-OF-PLAY: the child exits when the sound finishes, so hs.task's doneFn is the
-    -- real end event -- it fires the "stop" callback (used by ms.sound's synchronous mode
-    -- to resume a yielded coroutine). :stop() terminates the child, which also fires it.
-    --
-    -- VOLUME: passed to the child as 0..100; the child sets its own process wave volume,
-    -- so ms.soundVolume applies without any cross-talk between overlapping sounds.
-    --
-    -- getByName has no Windows analogue -> nil (mudscript's `or` fallback then logs).
+-- hs.sound --
+    -- Each sound plays in its own hs.soundhelper child process, so concurrent
+    -- sounds mix and the input hook thread never blocks.
+    -- The stop callback fires when the child exits or is stopped.
+    -- Volume is passed to the child at :play(). Looping respawns the child.
+    -- currentTime reports elapsed play time and a set value shifts the report.
+    -- device is stored and playback uses the default device.
+    -- getByName returns nil because Windows has no system sound registry.
 -- END --
 
 local ffi  = require("ffi")
@@ -89,18 +61,27 @@ local sound = {}
 
     function Sound:play()
         -- A fresh play supersedes this object's own prior play (same handle = same sound).
+        self._stopping = true
         if self._task and self._task:isRunning() then
             pcall(function() self._task:terminate() end)
         end
         self._fired = false
         self._task  = nil
+        self._stopping = false
 
         local volArg = tostring(math.floor((self._volume or 1) * 100 + 0.5))
         local t = task.new(LUAJIT, function(_code)
-            fireStop(self)                   -- child exited => playback ended (or killed)
+            if self._loop and not self._stopping then
+                self._offset = 0
+                self:play()
+                return
+            end
+            self._offset = 0
+            fireStop(self)
         end, { HELPER, volArg, self._path })
         if t and t:start() then
             self._task = t
+            self._startedAt = host.now()
         else
             -- Could not spawn the helper: honour a pending callback so a synchronous
             -- ms.sound coroutine isn't left yielded forever.
@@ -110,6 +91,7 @@ local sound = {}
     end
 
     function Sound:stop()
+        self._stopping = true
         if self._task and self._task:isRunning() then
             pcall(function() self._task:terminate() end)   -- fires doneFn -> fireStop
         else
@@ -175,10 +157,36 @@ local sound = {}
         end
     -- END --
 
-    -- hs parity no-ops (mudscript sets these but they have no per-sound analogue here).
-    function Sound:loopSound(_) return self end
-    function Sound:device(_)    return self end
-    function Sound:name()       return self._path end
+    -- Loops while true. A looping sound replays itself until :stop()
+    function Sound:loopSound(v)
+        if v == nil then return self._loop end
+        self._loop = v and true or false
+        return self
+    end
+
+    -- Playback position in seconds, and a position applied from the next :play()
+    function Sound:currentTime(t)
+        if t ~= nil then
+            self._offset = math.max(0, t)
+            return self
+        end
+        if not self:isPlaying() then return self._offset or 0 end
+        local elapsed = (host.now() - self._startedAt) / 1000 + (self._offset or 0)
+        local d = self:duration()
+        if self._loop and d and d > 0 then return elapsed % d end
+        return elapsed
+    end
+
+    -- Output device name. Playback always uses the default device
+    function Sound:device(name)
+        if name == nil then return self._device end
+        self._device = name
+        return self
+    end
+
+    function Sound:name()
+        return self._path
+    end
 -- END --
 
 -- Constructors --
@@ -195,6 +203,9 @@ local sound = {}
             _cb     = nil,
             _fired  = false,
             _task   = nil,
+            _loop   = false,
+            _offset = 0,
+            _stopping = false,
         }, Sound)
     end
 

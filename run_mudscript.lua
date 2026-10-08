@@ -65,15 +65,6 @@
 -- END --
 
 -- Capture C-level stderr (LuaJIT panics / CRT abort / fastfail) to a file --
-    -- The detached launcher discards stderr, so a LuaJIT "PANIC: ..." or a CRT
-    -- abort()/__fastfail -- which write to the C stderr FILE*, NOT through the app's
-    -- own stdout logging -- vanished: a crash left hammerspoon.log simply stopping
-    -- mid-line with no reason recorded. Rebind the process's stderr FILE* to
-    -- data/stderr.log with freopen so any such write is preserved on disk. Append
-    -- mode (not truncate) so a crash survives an immediate relaunch; a header marks
-    -- each boot. Best-effort and non-fatal: guarded end-to-end, and a CRT without
-    -- __acrt_iob_func (pre-UCRT msvcrt) simply skips. Lua's io.stderr wraps this same
-    -- FILE*, so its :write()s follow along -- stderr is centralised here either way.
     pcall(function()
         local ffi = require("ffi")
         pcall(ffi.cdef, [[
@@ -81,8 +72,12 @@
             void* freopen(const char*, const char*, void*);
             int   fputs(const char*, void*);
             int   fflush(void*);
+            int   CreateDirectoryA(const char*, void*);
         ]])
-        local se = ffi.C.__acrt_iob_func(2)          -- stderr is iob index 2 on UCRT
+        ffi.C.CreateDirectoryA(hsDir, nil)
+        ffi.C.CreateDirectoryA(hsDir .. "/data", nil)
+
+        local se = ffi.C.__acrt_iob_func(2)
         if se ~= nil and ffi.C.freopen(hsDir .. "/data/stderr.log", "a", se) ~= nil then
             ffi.C.fputs("\n===== stderr capture: boot " ..
                 os.date("%Y-%m-%d %H:%M:%S") .. " (pid follows in log) =====\n", se)
@@ -172,39 +167,59 @@ int MoveFileExA(const char*, const char*, unsigned long);
 -- END --
 
 -- Persistent logging: tee every diagnostic write to a logfile --
-    -- Until now output went ONLY to the console (io.stderr), so a boot-time panic
-    -- or a window that closes takes its own error message with it. Tee stdout+stderr
-    -- into <hsDir>/hammerspoon.log (appended each write, flushed immediately) so there
-    -- is always a durable record to read after the fact. The console still echoes.
-    --
-    -- A true LuaJIT `PANIC:` or a Win32 access violation aborts BELOW the Lua io
-    -- layer, so the tee alone can't see it. Rather than require a launch-time shell
-    -- redirect, we fold the capture in (Windows only, further down this block): a
-    -- Win32 unhandled-exception filter records the exception code (0xC0000005 = the
-    -- access violation the COM/webview path throws) and a SIGABRT handler records
-    -- LuaJIT's panic->abort. Both write a marker into the same logfile, so a hard
-    -- crash still leaves a durable "it died HERE, with THIS code" line.
     do
         local logPath = hsDir .. "/hammerspoon.log"
         local lf = io.open(logPath, "a")
         if lf then
             lf:write("\n===== hammerspoon boot " .. os.date("%Y-%m-%d %H:%M:%S") .. " =====\n")
             lf:flush()
-            -- File handles are userdata (no field assignment), so replace io.stdout/
-            -- io.stderr with proxy TABLES that tee :write into the log then forward to
-            -- the real stream. Only write/flush/close are used against these; forward
-            -- those explicitly rather than proxy every FILE method.
+
+            local tail = {}
+
+            _G.__mudspoon_log = {
+                tail = tail,
+                sink = nil
+            }
+
+            -- Keeps the newest chunks for the console and forwards each to the live sink
+            local function record(...)
+                local parts = {}
+                for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+                local text = table.concat(parts)
+
+                tail[#tail + 1] = text
+                if #tail > 2000 then table.remove(tail, 1) end
+
+                local sink = _G.__mudspoon_log.sink
+                if sink then pcall(sink, text) end
+            end
+
+            -- Replaces io.stdout and io.stderr with tables that tee writes into the log
             local function proxy(real)
                 return {
-                    write = function(self, ...) lf:write(...); lf:flush(); real:write(...); return self end,
-                    flush = function(self) lf:flush(); real:flush(); return self end,
-                    close = function() end,
+                    write = function(self, ...)
+                        lf:write(...)
+                        lf:flush()
+                        record(...)
+                        real:write(...)
+
+                        return self
+                    end,
+                    flush = function(self)
+                        lf:flush()
+                        real:flush()
+
+                        return self
+                    end,
+                    close = function() end
                 }
             end
+
             io.stdout = proxy(io.stdout)
             io.stderr = proxy(io.stderr)
             io.write  = function(...) return io.stdout:write(...) end
-            -- print() writes to C stdout below the io layer; reroute it through the tee.
+
+            -- Routes print through the tee
             print = function(...)
                 local parts = {}
                 for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
@@ -357,7 +372,7 @@ int MoveFileExA(const char*, const char*, unsigned long);
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
         "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus",
-        "distributednotifications", "processInfo", "image", "settings" }
+        "distributednotifications", "processInfo", "image", "settings", "socket", "chooser" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -410,9 +425,7 @@ int MoveFileExA(const char*, const char*, unsigned long);
     -- Prune a name the moment its real hs/<name>.lua exists (a preload entry would
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
-    local STUB_MODULES = {
-        "chooser",
-    }
+    local STUB_MODULES = {}
 
     -- Webview: stub it UNLESS MUDSPOON_WEBVIEW=1 wired the real module above. The
     -- black-hole makes hs.webview.new()/usercontent no-op instead of running COM.
@@ -511,9 +524,41 @@ int MoveFileExA(const char*, const char*, unsigned long);
         if not ok then io.stderr:write("hs.reload error: " .. tostring(rerr) .. "\n") end
     end
 
-    hs.accessibilityState = function() return true end   -- Win32 has no AX gate
-    hs.openConsole        = function() end                 -- no console window yet
-    hs.loadSpoon          = function() return nil end      -- plugins not wired yet
+    hs.accessibilityState = function() return true end
+
+    hs.console = setmetatable({}, {
+        __index = function(_, key) return require("hs.console")[key] end
+    })
+
+    hs.openConsole = function(...) return require("hs.console").open(...) end
+
+    hs.closeConsole = function() return require("hs.console").close() end
+-- END --
+
+-- hs.loadSpoon --
+    package.path = package.path .. ";" .. hsDir .. "/Spoons/?.spoon/init.lua"
+
+    _G.spoon = _G.spoon or {}
+
+    hs.loadSpoon = function(name, global)
+        print("-- Loading Spoon: " .. tostring(name))
+
+        local ok, obj = pcall(require, name)
+
+        if not ok then error("hs.loadSpoon: unable to load " .. tostring(name) .. ": " .. tostring(obj), 2) end
+
+        if type(obj) ~= "table" then return obj end
+
+        local path = package.searchpath(name, package.path)
+
+        obj.spoonPath = path and path:gsub("\\", "/"):match("^(.*/)") or (hsDir .. "/Spoons/" .. name .. ".spoon/")
+
+        if type(obj.init) == "function" then obj:init() end
+
+        if global ~= false then _G.spoon[name] = obj end
+
+        return obj
+    end
 -- END --
 
 -- Windows os.execute: service `kill [-N] <pid>` natively --

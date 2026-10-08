@@ -11,7 +11,7 @@
     -- SendInput consumes are a separate wire value; macToVk / vkToMac translate at that
     -- OS boundary (Thread B on read, Thread C on write). Names are the portable surface.
     --
-    -- Leaf: no Foundation dependency, no FFI. Pure static table.
+    -- The key tables are static. Layout calls load Win32 on first use.
 -- END --
 
 local keycodes = {}
@@ -180,18 +180,171 @@ local keycodes = {}
     end
 -- END --
 
--- Compatibility stubs --
-    -- Thread D owns only the static table. These exist so `require`rs that probe the
-    -- fuller Hammerspoon surface don't nil-crash. Layout switching is a no-op on the
-    -- single fixed layout the host assumes today; revisit if per-layout remapping lands.
+-- Keyboard layouts --
+    -- Win32 handle, FFI declarations and lookups load on first use
+    local W
+
+    local function win()
+        if W then return W end
+        local ffi = require("ffi")
+        local host = require("hs.foundation")
+        ffi.cdef[[
+HWND  GetForegroundWindow(void);
+DWORD GetWindowThreadProcessId(HWND, DWORD*);
+BOOL  PostMessageA(HWND, UINT, WPARAM, LPARAM);
+void* GetKeyboardLayout(DWORD);
+int   GetKeyboardLayoutList(int, void**);
+int   GetLocaleInfoW(DWORD, DWORD, unsigned short*, int);
+]]
+        W = {
+            ffi = ffi,
+            U = host.C.user32,
+            K = host.C.kernel32,
+            buf = ffi.new("unsigned short[?]", 128),
+            list = ffi.new("void*[?]", 64),
+        }
+        return W
+    end
+
+    local WM_INPUTLANGCHANGEREQUEST = 0x0050
+
+    local LOCALE_SENGLISHDISPLAYNAME = 0x72
+
+    local SPECIAL_NAMES = {
+        [0x0409] = "U.S.",
+        [0x0809] = "British",
+    }
+
+    local function langId(hkl)
+        return tonumber(W.ffi.cast("uintptr_t", hkl)) % 0x10000
+    end
+
+    local function layoutName(hkl)
+        local id = langId(hkl)
+        if SPECIAL_NAMES[id] then return SPECIAL_NAMES[id] end
+        local n = W.K.GetLocaleInfoW(id, LOCALE_SENGLISHDISPLAYNAME, W.buf, 128)
+        if n <= 1 then return string.format("%04X", id) end
+        local out = {}
+        for i = 0, n - 2 do
+            local c = W.buf[i]
+            out[#out + 1] = c < 128 and string.char(c) or "?"
+        end
+        return table.concat(out)
+    end
+
+    local function isMethod(hkl)
+        return tonumber(W.ffi.cast("uintptr_t", hkl)) % 0x100000000 >= 0xE0000000
+    end
+
+    local function foregroundThread()
+        local hwnd = W.U.GetForegroundWindow()
+        if hwnd == nil then return 0 end
+        return W.U.GetWindowThreadProcessId(hwnd, nil)
+    end
+
+    local function currentHkl()
+        return W.U.GetKeyboardLayout(foregroundThread())
+    end
+
+    -- Installed layouts as an array of { name, hkl }, filtered by isMethod
+    local function installed(wantMethods)
+        local n = W.U.GetKeyboardLayoutList(64, W.list)
+        local out = {}
+        for i = 0, n - 1 do
+            local hkl = W.list[i]
+            if isMethod(hkl) == wantMethods then
+                out[#out + 1] = { name = layoutName(hkl), hkl = hkl }
+            end
+        end
+        return out
+    end
+
+    local function activate(name, wantMethods)
+        win()
+        for _, l in ipairs(installed(wantMethods)) do
+            if l.name == name then
+                local hwnd = W.U.GetForegroundWindow()
+                if hwnd == nil then return false end
+                W.U.PostMessageA(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, W.ffi.cast("intptr_t", l.hkl))
+                return true
+            end
+        end
+        return false
+    end
+
+    local function names(wantMethods)
+        win()
+        local out = {}
+        for _, l in ipairs(installed(wantMethods)) do
+            out[#out + 1] = l.name
+        end
+        return out
+    end
+
+    -- Name of the foreground window's keyboard layout
     function keycodes.currentLayout()
-        return "US"
+        win()
+        return layoutName(currentHkl())
     end
 
+    -- Names of the installed keyboard layouts
+    function keycodes.layouts()
+        return names(false)
+    end
+
+    -- Switches the foreground window's layout by name and returns whether it was found
+    function keycodes.setLayout(name)
+        return activate(name, false)
+    end
+
+    -- Stable identifier of the current layout
     function keycodes.currentSourceID()
-        return "com.apple.keylayout.US"
+        win()
+        return string.format("com.microsoft.keylayout.%04X", langId(currentHkl()))
     end
 
+    -- Name of the current input method (IME), nil when the layout is not one
+    function keycodes.currentMethod()
+        win()
+        local hkl = currentHkl()
+        if isMethod(hkl) then return layoutName(hkl) end
+        return nil
+    end
+
+    -- Names of the installed input methods
+    function keycodes.methods()
+        return names(true)
+    end
+
+    -- Switches the foreground window's input method by name
+    function keycodes.setMethod(name)
+        return activate(name, true)
+    end
+-- END --
+
+-- Input source change callback --
+    local watchTimer
+    local lastSource
+
+    -- Calls fn when the current layout changes. Passing nil removes the callback.
+    function keycodes.inputSourceChanged(fn)
+        if watchTimer then
+            watchTimer:stop()
+            watchTimer = nil
+        end
+        if type(fn) ~= "function" then return end
+        lastSource = keycodes.currentSourceID()
+        watchTimer = require("hs.timer").doEvery(0.25, function()
+            local now = keycodes.currentSourceID()
+            if now ~= lastSource then
+                lastSource = now
+                pcall(fn)
+            end
+        end)
+    end
+-- END --
+
+-- Name and code lookups --
     function keycodes.keyCodeForName(name)
         return map[name]
     end

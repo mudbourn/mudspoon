@@ -1,18 +1,6 @@
--- hs.application  (leaf) --
-    -- Process/application objects, matching Hammerspoon's `hs.application`. First
-    -- slice: enough for mac/ to resolve its target app, read its name/pid, find its
-    -- main window, and activate it.
-    --
-    -- Depends on FOUNDATION for shared FFI TYPES only, and on hs.window for
-    -- top-level window enumeration (the seam window._enumTopLevel / _pidOf). Lazy
-    -- requires break the load-time cycle (window:application() reaches back here).
-    --
-    -- WINDOWS HAS NO BUNDLE ID. :bundleID() returns the exe basename (e.g.
-    -- "RobloxPlayerBeta.exe") -- the closest stable per-app identifier -- or nil if
-    -- it can't be read. Documented choice; mac/ only uses it for debug display.
-    --
-    -- RIG-ONLY: every Win32 call can only be verified on the physical Windows
-    -- console. Keep ffi.load behind foundation so `loadfile` parses on the mac.
+-- hs.application --
+    -- Process objects over top-level windows. bundleID() is the exe basename.
+    -- hide() minimizes every visible window and unhide() restores them.
 -- END --
 
 local ffi = require("ffi")
@@ -24,9 +12,6 @@ local ffi = require("ffi")
 -- END --
 
 -- Own FFI surface (functions only; shared types come from Foundation) --
-    -- QueryFullProcessImageNameA lives in kernel32 (Vista+). We open the process with
-    -- PROCESS_QUERY_LIMITED_INFORMATION (0x1000), which succeeds for most processes
-    -- from a normal-integrity caller without SeDebug.
     ffi.cdef[[
 HANDLE OpenProcess(DWORD, BOOL, DWORD);
 BOOL   CloseHandle(HANDLE);
@@ -34,11 +19,23 @@ BOOL   QueryFullProcessImageNameA(HANDLE, DWORD, char*, DWORD*);
 HWND   GetForegroundWindow(void);
 DWORD  GetWindowThreadProcessId(HWND, DWORD*);
 BOOL   SetForegroundWindow(HWND);
+BOOL   PostMessageA(HWND, UINT, WPARAM, LPARAM);
+BOOL   TerminateProcess(HANDLE, UINT);
+BOOL   ShowWindow(HWND, int);
+BOOL   IsIconic(HWND);
 ]]
 -- END --
 
 -- Constants --
     local PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+    local PROCESS_TERMINATE = 0x0001
+
+    local WM_CLOSE = 0x0010
+
+    local SW_MINIMIZE = 6
+
+    local SW_RESTORE = 9
 
     local HOST_NAME = "Hammerspoon"
 
@@ -167,13 +164,12 @@ BOOL   SetForegroundWindow(HWND);
         return tonumber(fgPidBuf[0]) == self._pid
     end
 
-    -- :activate() -> bring the app's main window to the foreground. Callback-free
-    -- (SetForegroundWindow), but subject to Windows foreground-lock rules -- may
-    -- silently no-op from a background caller. RIG-VERIFY.
+    -- Brings the main window to the foreground and returns whether one existed
     function App:activate()
         local w = self:mainWindow()
-        if w and w.focus then w:focus() end
-        return self
+        if not w then return false end
+        w:focus()
+        return true
     end
 
     -- Returns 1 when the app owns a visible window or is the host, else 0
@@ -187,11 +183,57 @@ BOOL   SetForegroundWindow(HWND);
         return imagePath(self._pid) ~= nil
     end
 
-    -- :kill() / :hide() -- not implemented (need TerminateProcess / ShowWindow on
-    -- every window). Stubbed no-ops so a call site does not crash. TODO rig work.
-    function App:kill() end
-    function App:hide() end
-    function App:unhide() end
+    -- Windows minimized by :hide(), keyed by pid
+    local hiddenByPid = {}
+
+    -- Posts WM_CLOSE to every visible window, the graceful quit
+    function App:kill()
+        for _, w in ipairs(self:allWindows()) do
+            U.PostMessageA(w._hwnd, WM_CLOSE, 0, 0)
+        end
+    end
+
+    -- Terminates the process outright
+    function App:kill9()
+        local h = K.OpenProcess(PROCESS_TERMINATE, 0, self._pid)
+        if h == nil then return false end
+        local ok = K.TerminateProcess(h, 1)
+        K.CloseHandle(h)
+        return ok ~= 0
+    end
+
+    -- Minimizes every visible window and remembers which ones
+    function App:hide()
+        local list = hiddenByPid[self._pid] or {}
+        for _, w in ipairs(self:allWindows()) do
+            if U.IsIconic(w._hwnd) == 0 then
+                U.ShowWindow(w._hwnd, SW_MINIMIZE)
+                list[#list + 1] = w._hwnd
+            end
+        end
+        hiddenByPid[self._pid] = list
+        return true
+    end
+
+    -- Restores the windows :hide() minimized
+    function App:unhide()
+        local list = hiddenByPid[self._pid] or {}
+        for _, hwnd in ipairs(list) do
+            U.ShowWindow(hwnd, SW_RESTORE)
+        end
+        hiddenByPid[self._pid] = nil
+        return true
+    end
+
+    -- True when the app owns windows and all of them are minimized
+    function App:isHidden()
+        local ws = self:allWindows()
+        if #ws == 0 then return false end
+        for _, w in ipairs(ws) do
+            if U.IsIconic(w._hwnd) == 0 then return false end
+        end
+        return true
+    end
 -- END --
 
 -- Public API --
