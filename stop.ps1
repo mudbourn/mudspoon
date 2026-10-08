@@ -46,6 +46,23 @@
             }
     }
 
+    # Helper binaries the host spawns from .local\bin
+    $helperDirs = @(Join-Path $HOME ".local\bin")
+
+    if ($Root) { $helperDirs += Join-Path (Split-Path $Root -Parent) ".local\bin" }
+
+    Get-CimInstance Win32_Process |
+        Where-Object {
+            $exe = $_.ExecutablePath
+
+            $exe -and ($helperDirs | Where-Object { $exe.StartsWith($_ + "\", "OrdinalIgnoreCase") })
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+
+            $stopped += $_.ProcessId
+        }
+
     if ($Root -and $Tray) {
         Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
             Where-Object { ($_.ProcessId -ne $PID) -and (Matches-Root $_ "tray\.ps1") } |

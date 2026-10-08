@@ -93,6 +93,7 @@ end;
 procedure StopRunningApp;
 var
   Script: string;
+  Helpers: string;
   ResultCode: Integer;
 begin
   Script := ExpandConstant('{app}\app\stop.ps1');
@@ -100,6 +101,13 @@ begin
     Exec('powershell.exe',
       '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '" -Root "' + ExpandConstant('{app}\app') + '" -Tray',
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  Helpers := ExpandConstant('{app}\.local\bin\');
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command "$p = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(''' + Helpers + ''', ''OrdinalIgnoreCase'') }; ' +
+    '$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; ' +
+    'if ($p) { Wait-Process -Id $p.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 function InstalledUninstaller: string;
