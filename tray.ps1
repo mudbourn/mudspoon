@@ -1,4 +1,4 @@
-# Hammerspoon tray app: starts the host and shows a recovery icon while it is down #
+# Hammerspoon tray app: starts the host and owns the one notification-area icon #
     # Single instance. Started hidden by Mudspoon.vbs. -BugReport and -Autostart act once and exit.
 param(
     [switch]$BugReport,
@@ -136,7 +136,7 @@ $ErrorActionPreference = "Stop"
     $icon = New-Object System.Windows.Forms.NotifyIcon
     $icon.Icon = New-Object System.Drawing.Icon (Join-Path $Root "mudspoon.ico")
     $icon.Text = $Title
-    $icon.Visible = $false
+    $icon.Visible = $true
 
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
@@ -146,6 +146,10 @@ $ErrorActionPreference = "Stop"
     [void]$menu.Items.Add("-")
 
     $restart = $menu.Items.Add("Start Hammerspoon")
+    $stopHost = $menu.Items.Add("Stop Hammerspoon")
+
+    [void]$menu.Items.Add("-")
+
     $openLog = $menu.Items.Add("Open boot log")
     $openCfg = $menu.Items.Add("Open config folder")
     $report = $menu.Items.Add("Send bug report")
@@ -172,6 +176,8 @@ $ErrorActionPreference = "Stop"
     }
 
     $restart.add_Click({ Restart-Host })
+
+    $stopHost.add_Click({ Stop-Host })
 
     $openLog.add_Click({
         if (Test-Path $BootLog) {
@@ -211,7 +217,10 @@ $ErrorActionPreference = "Stop"
     $timer.add_Tick({
         $up = [bool](Get-HostProcess)
         $status.Text = $(if ($up) { "Status: running" } else { "Status: stopped" })
-        $icon.Visible = -not $up
+
+        $restart.Text = $(if ($up) { "Restart Hammerspoon" } else { "Start Hammerspoon" })
+
+        $stopHost.Enabled = $up
     })
     $timer.Start()
 # END #

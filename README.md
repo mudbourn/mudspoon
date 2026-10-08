@@ -60,7 +60,7 @@ windowless and detached, with the watchdog beside it.
 | `-NoGlass` | Draw webviews on layered windows instead of DWM glass windows. |
 | `-Dev` | Start the `hs.ipc` endpoint for `hs.cmd`. |
 
-`Stop-Mudspoon.cmd` quits the windowless host. The menubar quit also works.
+`Stop-Mudspoon.cmd` quits the windowless host. The tray icon, which stays in the notification area whether or not the host runs, can also start, restart and stop it.
 
 With `-Dev`, `hs.cmd` sends Lua to the running host and prints the result:
 
