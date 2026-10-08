@@ -147,6 +147,30 @@
     end
 -- END --
 
+-- os.rename replaces an existing destination (POSIX rename) --
+    if package.config:sub(1, 1) == "\\" then
+        local ffi = require("ffi")
+
+        ffi.cdef[[
+int MoveFileExA(const char*, const char*, unsigned long);
+]]
+
+        local MOVEFILE_REPLACE_EXISTING = 0x1
+
+        local MOVEFILE_COPY_ALLOWED = 0x2
+
+        local realRename = os.rename
+
+        os.rename = function(from, to)
+            local flags = MOVEFILE_REPLACE_EXISTING + MOVEFILE_COPY_ALLOWED
+
+            if ffi.C.MoveFileExA(tostring(from), tostring(to), flags) ~= 0 then return true end
+
+            return realRename(from, to)
+        end
+    end
+-- END --
+
 -- Persistent logging: tee every diagnostic write to a logfile --
     -- Until now output went ONLY to the console (io.stderr), so a boot-time panic
     -- or a window that closes takes its own error message with it. Tee stdout+stderr
