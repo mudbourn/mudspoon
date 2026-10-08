@@ -685,6 +685,76 @@ int BCryptDestroyHash(void*);
         return "", 0
     end
 
+    -- base64 -D -i 'X' -o 'Y'
+    local function nativeBase64Mac(command)
+        local argv = command:match("^base64 %-D %-i ") and argvOf(command)
+        if not argv or #argv ~= 6 or argv[5] ~= "-o" then return nil end
+
+        local inPath = argv[4]
+        local outPath = argv[6]
+        if not isDrivePath(inPath) or not isDrivePath(outPath) then return nil end
+
+        local fin = io.open(inPath, "rb")
+        if not fin then return nil end
+
+        local text = fin:read("*a")
+        fin:close()
+
+        local bytes = text and base64Decode(text)
+        if not bytes then return nil end
+
+        local fout = io.open(outPath, "wb")
+        if not fout then return nil end
+
+        fout:write(bytes)
+        fout:close()
+
+        return "", 0
+    end
+
+    -- openssl version 2>/dev/null
+    local function nativeOpensslVersion(command)
+        if command ~= "openssl version 2>/dev/null" then return nil end
+
+        local okMod, ossl = pcall(require, "hs.opensslnative")
+        if not okMod or not ossl.available() then return nil end
+
+        return "OpenSSL 3.0.0 (mudspoon native)\n", 0
+    end
+
+    -- openssl dgst -sha256 -verify 'KEY' -signature 'SIG' 'MSG' 2>&1
+    local function nativeOpensslVerify(command)
+        local body = command:match("^(openssl dgst %-sha256 %-verify .-) 2>&1$")
+        local argv = body and argvOf(body)
+        if not argv or #argv ~= 8 or argv[6] ~= "-signature" then return nil end
+
+        local keyPath, sigPath, msgPath = argv[5], argv[7], argv[8]
+        if not (isDrivePath(keyPath) and isDrivePath(sigPath) and isDrivePath(msgPath)) then
+            return nil
+        end
+
+        local okMod, ossl = pcall(require, "hs.opensslnative")
+        if not okMod then return nil end
+
+        local kf = io.open(keyPath, "rb")
+        local sf = io.open(sigPath, "rb")
+        local pem = kf and kf:read("*a")
+        local sig = sf and sf:read("*a")
+        if kf then kf:close() end
+        if sf then sf:close() end
+        if not pem or not sig then return nil end
+
+        local digest = sha256File(msgPath)
+        if not digest then return nil end
+
+        local verified = ossl.verifySha256(pem, sig, digest)
+        if verified == nil then return nil end
+
+        if verified then return "Verified OK\n", 0 end
+
+        return "Verification failure\n", 1
+    end
+
     local HASH_PROBE = "command -v shasum >/dev/null 2>&1 && printf '%s' 'shasum -a 256' || "
         .. "(command -v sha256sum >/dev/null 2>&1 && printf sha256sum || printf '')"
 
@@ -710,6 +780,15 @@ int BCryptDestroyHash(void*);
 
         local b64Out, b64Rc = nativeBase64(command)
         if b64Out then return b64Out, b64Rc end
+
+        local macOut, macRc = nativeBase64Mac(command)
+        if macOut then return macOut, macRc end
+
+        local verOut, verRc = nativeOpensslVersion(command)
+        if verOut then return verOut, verRc end
+
+        local sigOut, sigRc = nativeOpensslVerify(command)
+        if sigOut then return sigOut, sigRc end
 
         local quotedDir, mid = command:match(
             "^cd (.-) && find %. %-type f ! %-name '%.DS_Store'(.-) 2>/dev/null$")
