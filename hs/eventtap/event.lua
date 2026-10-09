@@ -24,6 +24,9 @@ local bit = require("bit")
 local host     = require("hs.foundation")
 local keycodes = require("hs.keycodes")
 local U        = (host.C and host.C.user32) or ffi.load("user32")
+local K        = (host.C and host.C.kernel32) or ffi.load("kernel32")
+
+require("hs.fs")
 
 -- Soft dependency on hs.screen (Thread G), for absolute mouse moves only. --
     local screen
@@ -157,7 +160,7 @@ UINT MapVirtualKeyW(UINT, UINT);
         mi.dwExtraInfo = extra or MAGIC
     end
 
-    -- True while the previous send came up short, so a burst logs once
+    -- Whether the last send came up short
     local sendFailing = false
 
     -- Materialise a sequence of fill-closures into one INPUT[n] and send it atomically.
@@ -168,7 +171,7 @@ UINT MapVirtualKeyW(UINT, UINT);
         for i = 1, n do fills[i](arr[i - 1]) end
         local sent = U.SendInput(n, arr, ffi.sizeof("INPUT"))
         if sent < n then
-            local err = ffi.errno()
+            local err = tonumber(K.GetLastError())
             if not sendFailing then
                 io.stderr:write("hammerspoon: SendInput sent " .. sent .. " of " .. n .. " events, error " .. tostring(err) .. "\n")
             end

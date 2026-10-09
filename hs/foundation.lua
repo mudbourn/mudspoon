@@ -382,8 +382,7 @@ local host = {
     -- A keyDown for a vk already marked held is a repeat -> keyboardEventAutorepeat.
     local keyHeld = {}
 
-    -- Keys our own injections hold down, kept apart so a synthetic keyUp never
-    -- clears the hardware held state. Panic releases both sets.
+    -- Keys held by injected events
     local injHeld = {}
 
     -- The held view eventFlags reads: hardware keys plus injected keys
@@ -458,8 +457,16 @@ local host = {
 
             local kb = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
             local vk = tonumber(kb.vkCode)
-            local set = bit.band(kb.flags, LLKHF_INJECTED) ~= 0 and injHeld or keyHeld
-            set[vk] = (t == "keyDown") or nil
+            local injected = bit.band(kb.flags, LLKHF_INJECTED) ~= 0
+
+            if t == "keyDown" then
+                local set = injected and injHeld or keyHeld
+
+                set[vk] = true
+            else
+                injHeld[vk] = nil
+                if not injected then keyHeld[vk] = nil end
+            end
         end
 
         -- Keeps held-button state current for an event that bypasses the subscribers
@@ -577,13 +584,15 @@ local host = {
                     end
 
                     local injected = bit.band(kb.flags, LLKHF_INJECTED) ~= 0
-                    local set = injected and injHeld or keyHeld
                     local autorepeat = false
                     if t == "keyDown" then
+                        local set = injected and injHeld or keyHeld
+
                         autorepeat = not injected and keyHeld[vk] == true
                         set[vk] = true
                     elseif t == "keyUp" then
-                        set[vk] = nil
+                        injHeld[vk] = nil
+                        if not injected then keyHeld[vk] = nil end
                     end
                     local flags = eventFlags(vk, t == "keyDown", heldView())
 
