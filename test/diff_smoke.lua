@@ -2,10 +2,10 @@
 -- diff_smoke.lua -- compare two smoke.lua reports to separate real PARITY GAPS
 -- from platform-inherent / environmental differences.
 --
---   luajit test/diff_smoke.lua <reportA.json> <reportB.json>
+--   runtime\lua.exe -E test/diff_smoke.lua <reportA.json> <reportB.json>
 --
 -- Typically A = the Mac (Hammerspoon) report, B = the Windows (mudspoon) report,
--- but order does not matter -- findings name each host. Runs in plain LuaJIT; it
+-- but order does not matter -- findings name each host. Runs in plain Lua; it
 -- reuses the port's own pure-Lua JSON decoder (../hs/json.lua), overridable with
 -- MUDSPOON_JSON=<path>. Exit code 1 if any GAP is found, else 0.
 -- =============================================================================
@@ -36,7 +36,7 @@ end
 
 local pathA, pathB = arg[1], arg[2]
 if not (pathA and pathB) then
-    io.stderr:write("usage: luajit test/diff_smoke.lua <reportA.json> <reportB.json>\n")
+    io.stderr:write("usage: lua test/diff_smoke.lua <reportA.json> <reportB.json>\n")
     os.exit(2)
 end
 

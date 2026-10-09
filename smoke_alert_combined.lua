@@ -7,7 +7,7 @@
     -- Physical console, foreground, NOT over RDP (layered top-most windows need the
     -- interactive desktop; RDP misreports).
     --
-    --   luajit smoke_alert_combined.lua
+    --   runtime/lua.exe -E smoke_alert_combined.lua
     --
     -- SEE-IT test: the pass is your eyes confirming three pills fade in and stack
     -- top-to-bottom, a styled amber pill pops a beat later, all fade out on their
@@ -19,7 +19,7 @@
 -- Resolve requires from this script's own directory (matches smoke_alert.lua). --
     local here = (arg[0] or "smoke_alert_combined.lua"):gsub("[^/\\]*$", "")
     if here == "" then here = "./" end
-    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. package.path
+    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. here .. "compat/?.lua;" .. package.path
 -- END --
 
 local host  = require("hs.foundation")

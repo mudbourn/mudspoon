@@ -1,4 +1,4 @@
--- mudspoon hs.webview end-to-end spike (WebView2 over LuaJIT COM) --
+-- mudspoon hs.webview end-to-end spike (WebView2 over COM) --
     -- The artifact that PROVES the WebView2 binding on the Windows rig. It exercises
     -- the whole path mudscript depends on, in order:
     --
@@ -18,16 +18,16 @@
     -- hs.webview is a parse-checked-only scaffold. This spike has NEVER run.
     -- Requires: a physical Windows console (NOT RDP -- layered top-most windows
     -- misbehave over RDP), the Edge WebView2 Evergreen runtime installed, and
-    -- WebView2Loader.dll on the DLL search path next to luajit.exe.
+    -- WebView2Loader.dll on the DLL search path next to lua.exe.
     --
-    --   luajit spike_webview.lua
+    --   runtime/lua.exe -E spike_webview.lua
     -- ===================================================================
 -- END --
 
 -- Resolve requires from this script's own directory (matches smoke_alert_combined.lua). --
     local here = (arg[0] or "spike_webview.lua"):gsub("[^/\\]*$", "")
     if here == "" then here = "./" end
-    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. package.path
+    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. here .. "compat/?.lua;" .. package.path
 -- END --
 
 local host    = require("hs.foundation")

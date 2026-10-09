@@ -12,7 +12,7 @@ report on each host and diff them, so a divergence is *measured*, not guessed.
 | `smoke.lua` | both | The suite. Assumes a global `hs`. Contract + behavior + async tests over the exact hs.* surface mudscript uses. Writes a JSON report + console summary. |
 | `smoke_win.ps1` | Windows | Boots `run_mudscript.lua` with `MUDSPOON_SMOKE` set and runs the suite against the real port. |
 | `smoke_mac.sh` | macOS | Runs the suite inside a live Hammerspoon via the `hs` command-line tool. |
-| `diff_smoke.lua` | anywhere w/ luajit | Compares two reports; prints PARITY GAPS / VALUE SKEW / COVERAGE / INFO. |
+| `diff_smoke.lua` | anywhere w/ lua | Compares two reports; prints PARITY GAPS / VALUE SKEW / COVERAGE / INFO. |
 
 ## Run it
 
@@ -32,7 +32,7 @@ bash test/smoke_mac.sh --net
 
 **Diff the two:**
 ```
-luajit test/diff_smoke.lua smoke_report_hammerspoon.json smoke_report_mudspoon.json
+runtime\lua.exe -E test/diff_smoke.lua smoke_report_hammerspoon.json smoke_report_mudspoon.json
 ```
 Exit code is `1` if any PARITY GAP is found. Only `PARITY GAPS` are actionable —
 a test that **passes on one host and is tested-and-broken on the other**. The other

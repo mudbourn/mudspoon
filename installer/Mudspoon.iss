@@ -68,6 +68,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\wv2.ps1"""; StatusMsg: "Checking the WebView2 runtime..."; Flags: runhidden; Check: NeedWebView2
 Filename: "{sys}\wscript.exe"; Parameters: """{app}\app\Mudspoon.vbs"""; WorkingDir: "{app}\app"; Description: "Launch Hammerspoon"; Flags: nowait postinstall skipifsilent
 
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\app\luajit"
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\app"
 

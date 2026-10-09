@@ -4,7 +4,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host = require("hs.foundation")
 
@@ -46,8 +45,6 @@ BOOL  PostMessageA(HWND, UINT, WPARAM, LPARAM);
     local function wndProcFn(hwnd, msg, wp, lp)
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end
-
-    jit.off(wndProcFn, true)
 
     local wndProc = ffi.cast("WNDPROC", wndProcFn)
 
@@ -108,7 +105,7 @@ BOOL  PostMessageA(HWND, UINT, WPARAM, LPARAM);
                 local sub = buildMenu(it.menu, cmdMap, counter)
 
                 if sub ~= nil then
-                    U.AppendMenuA(hm, bit.bor(MF_STRING, MF_POPUP), ffi.cast("uintptr_t", sub), cstr(it.title))
+                    U.AppendMenuA(hm, (MF_STRING | MF_POPUP), ffi.cast("uintptr_t", sub), cstr(it.title))
                 end
             else
                 local id = counter.n
@@ -122,9 +119,9 @@ BOOL  PostMessageA(HWND, UINT, WPARAM, LPARAM);
 
                 local flags = MF_STRING
 
-                if it.disabled then flags = bit.bor(flags, MF_GRAYED) end
+                if it.disabled then flags = (flags | MF_GRAYED) end
 
-                if it.checked or it.state == "on" then flags = bit.bor(flags, MF_CHECKED) end
+                if it.checked or it.state == "on" then flags = (flags | MF_CHECKED) end
 
                 U.AppendMenuA(hm, flags, id, cstr(it.title))
             end
@@ -158,7 +155,7 @@ BOOL  PostMessageA(HWND, UINT, WPARAM, LPARAM);
 
         U.SetForegroundWindow(hwnd)
 
-        local flags = bit.bor(TPM_LEFTALIGN, TPM_TOPALIGN, TPM_RIGHTBUTTON, TPM_RETURNCMD)
+        local flags = (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD)
 
         local cmd = tonumber(U.TrackPopupMenu(hmenu, flags, x, y, 0, hwnd, nil)) or 0
 

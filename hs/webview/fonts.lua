@@ -2,8 +2,6 @@
     -- Builds a <style> of data URI @font-face rules for every font in <configdir>/ui/fonts
 -- END --
 
-local bit = require("bit")
-
 local fonts = {}
 
 local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -32,15 +30,15 @@ local cache = {
         for i = 1, #data, 3 do
             local a, b, c = data:byte(i, i + 2)
 
-            local n = bit.bor(bit.lshift(a, 16), bit.lshift(b or 0, 8), c or 0)
+            local n = ((a << 16) | ((b or 0) << 8) | (c or 0))
 
-            local s1 = bit.band(bit.rshift(n, 18), 63) + 1
+            local s1 = ((n >> 18) & 63) + 1
 
-            local s2 = bit.band(bit.rshift(n, 12), 63) + 1
+            local s2 = ((n >> 12) & 63) + 1
 
-            local s3 = bit.band(bit.rshift(n, 6), 63) + 1
+            local s3 = ((n >> 6) & 63) + 1
 
-            local s4 = bit.band(n, 63) + 1
+            local s4 = (n & 63) + 1
 
             out[#out + 1] = B64:sub(s1, s1)
                 .. B64:sub(s2, s2)
@@ -109,7 +107,7 @@ local cache = {
         if os2 then
             weight = u16(data, os2 + 4)
 
-            italic = bit.band(u16(data, os2 + 62), 1) == 1
+            italic = (u16(data, os2 + 62) & 1) == 1
         end
 
         return {

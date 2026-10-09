@@ -17,7 +17,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host = require("hs.foundation")
 local U    = (host.C and host.C.user32) or ffi.load("user32")
@@ -136,7 +135,7 @@ local mouse = {}
     -- Reflects logical buttons, so a swapped (left-handed) mouse reports as the user
     -- sees it. Reuses foundation's GetAsyncKeyState -- not re-declared here.
     local function held(vk)
-        return bit.band(U.GetAsyncKeyState(vk), HIGH_BIT) ~= 0
+        return (U.GetAsyncKeyState(vk) & HIGH_BIT) ~= 0
     end
 
     function mouse.getButtons()

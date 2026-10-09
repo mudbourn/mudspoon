@@ -1,41 +1,5 @@
--- mudspoon: run mudscript's mac/ config under the hs.* layer (boot bootstrap) --
-    -- The host glue that Hammerspoon.app normally provides: assemble `hs`, expose
-    -- it as a GLOBAL (mudscript's mac/ code uses `hs` unqualified), point
-    -- package.path at both trees, set the host-provided hs fields (configdir,
-    -- reload, ...), then run mudscript's entry file on foundation's runloop.
-    --
-    -- STUB-AND-BOOT: modules mudscript needs that mudspoon hasn't built yet are
-    -- installed here as black-hole stubs (see below) so mac/init.lua can load
-    -- top-to-bottom. A stub survives require() and any chained access, but does
-    -- nothing -- so the first place real behaviour is required surfaces as a clear
-    -- runtime wall, not a load-time crash across 20 unbuilt modules. As each real
-    -- module lands (a file in hs/), delete its name from STUB_MODULES below so the
-    -- real one is used instead of the stub (preload shadows package.path).
-    --
-    -- Windows/rig only: requiring hs pulls foundation, which ffi.load()s user32 --
-    -- this cannot run on macOS. Same console rules as the spikes (physical,
-    -- foreground, not RDP).
-    --
-    -- Usage:  luajit run_mudscript.lua [MUDSCRIPT_ROOT]
-    --   MUDSCRIPT_ROOT defaults to $MUDSCRIPT_HOME, else a sibling ../mudscript.
--- END --
-
--- Lua 5.2+ compat: table.pack / table.unpack on LuaJIT (5.1) --
-    -- Hammerspoon's macOS LuaJIT is built with LUAJIT_ENABLE_LUA52COMPAT, so mac/ code
-    -- freely calls table.pack / table.unpack (e.g. ms_devtools' console eval:
-    -- `table.pack(pcall(fn))`). This rig's LuaJIT lacks that compat, so table.pack is
-    -- nil ("attempt to call field 'pack' (a nil value)") and table.unpack is missing.
-    -- Provide both, matching the reference semantics (pack sets the field `n`). Only
-    -- fill gaps -- never clobber a real implementation if one is present.
-    if not table.pack then
-        table.pack = function(...)
-            return { n = select("#", ...), ... }
-        end
-    end
-    if not table.unpack then
-        table.unpack = unpack   -- LuaJIT keeps the 5.1 global `unpack`
-    end
--- END --
+-- Runs mudscript's mac/ config under the hs.* layer
+--   runtime/lua.exe -E run_mudscript.lua [MUDSCRIPT_ROOT]
 
 -- Locate the trees + the HOME mudscript installs under --
     -- This file sits at the mudspoon repo root; hs/ is beside it.
@@ -48,7 +12,7 @@
     -- Default anchor: whichever candidate actually contains a .hammerspoon/init.lua.
     -- The tree used to live at ../mudscript/.hammerspoon; it now sits at ../.hammerspoon
     -- (a sibling of this repo). Probe the new layout first, then the legacy one, so a
-    -- bare `luajit run_mudscript.lua` works either way. An explicit arg / MUDSCRIPT_HOME
+    -- bare `lua.exe run_mudscript.lua` works either way. An explicit arg / MUDSCRIPT_HOME
     -- always wins.
     local function hasConfig(dir)
         local fh = io.open(dir .. "/.hammerspoon/init.lua", "r")
@@ -64,7 +28,18 @@
     local hsDir = homeDir .. "/.hammerspoon"          -- the actual config/install dir
 -- END --
 
--- Capture C-level stderr (LuaJIT panics / CRT abort / fastfail) to a file --
+-- Module search path: the repo root, compat/ and the .hammerspoon install --
+    package.path = table.concat({
+        here  .. "?.lua",
+        here  .. "?/init.lua",
+        here  .. "compat/?.lua",
+        hsDir .. "/?.lua",
+        hsDir .. "/?/init.lua",
+        package.path,
+    }, ";")
+-- END --
+
+-- Capture C-level stderr (CRT abort and fastfail) to a file --
     pcall(function()
         local ffi = require("ffi")
         pcall(ffi.cdef, [[
@@ -117,9 +92,6 @@
 -- END --
 
 -- Make os.getenv("HOME") resolve (Windows has USERPROFILE, not HOME) --
-    -- Shimmed rather than set via _putenv: LuaJIT's os.getenv reads the CRT env, and
-    -- which CRT wins is fragile on Windows. A wrapper is portable and total: mac/ sees
-    -- HOME (and a TMPDIR) no matter the host. Real vars still win when present.
     do
         local realGetenv = os.getenv
 
@@ -301,10 +273,10 @@ int MoveFileExA(const char*, const char*, unsigned long);
                     end)
                     kernel32.SetUnhandledExceptionFilter(filt)
 
-                    -- SIGABRT (LuaJIT panic -> abort, CRT assert). SIGABRT == 22 on Win.
+                    -- SIGABRT from the CRT. SIGABRT == 22 on Win.
                     local abrt = ffi.cast("SIGH", function()
                         pcall(function()
-                            lf:write("\n*** hammerspoon: SIGABRT -- LuaJIT panic or abort() ***\n")
+                            lf:write("\n*** hammerspoon: SIGABRT -- abort() ***\n")
                             lf:flush()
                         end)
                     end)
@@ -332,18 +304,6 @@ int MoveFileExA(const char*, const char*, unsigned long);
             return realExit(code, ...)
         end
     end
--- END --
-
--- package.path: mudspoon hs/ first, then the .hammerspoon install (for lib.* requires) --
-    -- require("hs.timer")        -> <mudspoon>/hs/timer.lua
-    -- require("lib.ms_guardian") -> <home>/.hammerspoon/lib/ms_guardian.lua
-    package.path = table.concat({
-        here  .. "?.lua",
-        here  .. "?/init.lua",
-        hsDir .. "/?.lua",
-        hsDir .. "/?/init.lua",
-        package.path,
-    }, ";")
 -- END --
 
 -- Per-monitor DPI awareness (Windows): draw at native pixels, not OS bitmap-stretch --
@@ -418,17 +378,21 @@ int MoveFileExA(const char*, const char*, unsigned long);
     -- mac/ also shells out via os.execute (mkdir -p, chmod, rm -rf, ...) which goes
     -- STRAIGHT to cmd.exe and errors ("The syntax of the command is incorrect."), so
     -- those ops silently fail. hs.execute already routes through sh; delegate to it.
-    -- Lua 5.1 os.execute returns a numeric code (0 = ok); map hs.execute's status to
-    -- that. No-command call reports shell availability (non-zero). mac/unix keeps the
-    -- native os.execute (hs.execute's mac path is the same popen shell anyway).
+    -- os.execute returns the Lua 5.4 triple (true or nil, "exit", code). A no-command
+    -- call reports shell availability.
     if package.config:sub(1, 1) == "\\" then
         local realOsExecute = os.execute
         os.execute = function(command)
-            if command == nil then return 1 end             -- "is a shell available?"
+            if command == nil then return true end
+
             local _, status = hs.execute(command, true)
-            return status and 0 or 1
+
+            if status then return true, "exit", 0 end
+
+            return nil, "exit", 1
         end
-        _G.__mudspoon_realOsExecute = realOsExecute          -- kept if ever needed
+
+        _G.__mudspoon_realOsExecute = realOsExecute
     end
 -- END --
 
@@ -506,19 +470,17 @@ int MoveFileExA(const char*, const char*, unsigned long);
     -- reset would require the engine to track and release them here.
     local ENTRY = hsDir .. "/init.lua"
 
-    -- Standard/JIT libraries that must never be evicted (name -> true).
+    -- Libraries that must never be evicted (name -> true)
     local PROTECTED_LOADED = {
         string = true, table = true, math = true, io = true, os = true,
         coroutine = true, debug = true, package = true, ["package.preload"] = true,
-        ffi = true, jit = true, bit = true, utf8 = true, _G = true,
+        ffi = true, cffi = true, utf8 = true, _G = true,
     }
 
     local function isProtected(name)
         if PROTECTED_LOADED[name] then return true end
         -- Engine shims: "hs" and anything under "hs." (hs.timer, hs.window, ...).
         if name == "hs" or name:sub(1, 3) == "hs." then return true end
-        -- JIT sublibraries (jit.util, jit.opt, ...).
-        if name:sub(1, 4) == "jit." then return true end
         return false
     end
 
@@ -612,10 +574,12 @@ int MoveFileExA(const char*, const char*, unsigned long);
                         or cmd:match("^%s*kill%s+(%d+)")
                     if pid then
                         local h = K.OpenProcess(PROCESS_TERMINATE, 0, tonumber(pid))
-                        if h == nil then return 1 end
+                        if h == nil then return nil, "exit", 1 end
                         local killed = K.TerminateProcess(h, 9)
                         K.CloseHandle(h)
-                        return killed ~= 0 and 0 or 1
+                        if killed ~= 0 then return true, "exit", 0 end
+
+                        return nil, "exit", 1
                     end
                 end
                 return _osexecute(cmd)

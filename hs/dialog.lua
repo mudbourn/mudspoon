@@ -30,7 +30,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host = require("hs.foundation")
 
@@ -160,7 +159,7 @@ local dialog = {}
             text = text .. "\n\n" .. tostring(informativeText)
         end
         local kind = button2 and MB_OKCANCEL or MB_OK
-        local flags = bit.bor(kind, MB_ICONWARNING, MB_SETFOREGROUND)
+        local flags = (kind | MB_ICONWARNING | MB_SETFOREGROUND)
         local ret = host.modal(U.MessageBoxA, nil, cstr(text), cstr("mudscript"), flags)
         if not button2 then return button1 end
         return (ret == IDOK) and button1 or button2
@@ -175,7 +174,7 @@ local dialog = {}
         local disp = ffi.new("char[?]", MAX_PATH)
         bi.pszDisplayName = disp
         bi.lpszTitle      = ffi.cast("LPCSTR", cstr(title or "Choose a folder"))
-        bi.ulFlags        = bit.bor(BIF_RETURNONLYFSDIRS, BIF_NEWDIALOGSTYLE)
+        bi.ulFlags        = (BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE)
         local pidl = host.modal(SH.SHBrowseForFolderA, bi)
         if pidl == nil then return nil end
         local out = ffi.new("char[?]", MAX_PATH)
@@ -204,8 +203,8 @@ local dialog = {}
         if defaultPath and #tostring(defaultPath) > 0 then
             ofn.lpstrInitialDir = ffi.cast("LPCSTR", cstr(defaultPath))
         end
-        local flags = bit.bor(OFN_FILEMUSTEXIST, OFN_PATHMUSTEXIST, OFN_EXPLORER, OFN_NOCHANGEDIR)
-        if allowMultiple then flags = bit.bor(flags, OFN_ALLOWMULTISELECT) end
+        local flags = (OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR)
+        if allowMultiple then flags = (flags | OFN_ALLOWMULTISELECT) end
         ofn.Flags = flags
 
         if host.modal(CD.GetOpenFileNameA, ofn) == 0 then return nil end   -- cancelled or error

@@ -10,7 +10,7 @@
     -- Physical console, foreground, NOT over RDP. RDP intercepts input and
     -- misreports hooks (see README). If this passes there, foundation stands up.
     --
-    --   luajit smoke.lua
+    --   runtime/lua.exe -E smoke.lua
     --
     -- Press Ctrl+Alt+K in any window. Expected:
     --   * "[smoke] chord fired" prints here.
@@ -22,7 +22,7 @@
 -- Resolve requires from this script's own directory, whatever the cwd is.
     local here = (arg[0] or "smoke.lua"):gsub("[^/\\]*$", "")
     if here == "" then here = "./" end
-    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. package.path
+    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. here .. "compat/?.lua;" .. package.path
 
 local hs = require("hs")
 

@@ -49,7 +49,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host     = require("hs.foundation")
 local timer    = require("hs.timer")
@@ -138,7 +137,7 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
     local EX_TOPMOST        = 0x00000008
     local EX_TOOLWINDOW     = 0x00000080
     local EX_NOACTIVATE     = 0x08000000
-    local EX_STYLE          = bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
+    local EX_STYLE          = (EX_LAYERED | EX_TOPMOST | EX_TOOLWINDOW | EX_NOACTIVATE)
 
     local SW_SHOWNOACTIVATE = 4
 
@@ -146,7 +145,7 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
     local SWP_NOSIZE        = 0x0001
     local SWP_NOMOVE        = 0x0002
     local SWP_NOACTIVATE    = 0x0010
-    local SWP_FRONT         = bit.bor(SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE)
+    local SWP_FRONT         = (SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
 
     local WM_DESTROY        = 0x0002
     local WM_ERASEBKGND     = 0x0014
@@ -208,20 +207,20 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
             local c = s:byte(i)
             local cp, len
             if     c < 0x80 then cp, len = c, 1
-            elseif c < 0xE0 then cp, len = bit.band(c, 0x1F), 2
-            elseif c < 0xF0 then cp, len = bit.band(c, 0x0F), 3
-            else                 cp, len = bit.band(c, 0x07), 4 end
+            elseif c < 0xE0 then cp, len = (c & 0x1F), 2
+            elseif c < 0xF0 then cp, len = (c & 0x0F), 3
+            else                 cp, len = (c & 0x07), 4 end
             for k = 1, len - 1 do
                 local cc = s:byte(i + k)
                 if not cc or cc < 0x80 or cc >= 0xC0 then cp = nil; break end
-                cp = cp * 0x40 + bit.band(cc, 0x3F)
+                cp = cp * 0x40 + (cc & 0x3F)
             end
             i = i + len
             if cp then
                 if cp > 0xFFFF then
                     cp = cp - 0x10000
-                    units[#units + 1] = 0xD800 + bit.rshift(cp, 10)
-                    units[#units + 1] = 0xDC00 + bit.band(cp, 0x3FF)
+                    units[#units + 1] = 0xD800 + (cp >> 10)
+                    units[#units + 1] = 0xDC00 + (cp & 0x3FF)
                 else
                     units[#units + 1] = cp
                 end
@@ -266,11 +265,6 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
 -- END --
 
 -- Shared window procedure (module scope: the GC must never free this cast) --
-    -- No custom WM_PAINT drawing -- the layered content comes from UpdateLayeredWindow.
-    -- WM_PAINT is just validated so Windows stops re-posting it; WM_ERASEBKGND is
-    -- claimed so the window never blanks between frames. Mouse messages fire the cb.
-    -- jit.off: a callback body must never be JIT-traced -- an error unwinding out of
-    -- compiled mcode across the FFI boundary panics LuaJIT ("bad callback").
     local function wndProcFn(hwnd, msg, wp, lp)
         local rec = records[keyOf(hwnd)]
         if msg == WM_PAINT then
@@ -303,8 +297,8 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
             if rec and rec.mouseCb then
                 pcall(function()
                     local L = tonumber(ffi.cast("uint32_t", lp))
-                    local x = bit.band(L, 0xFFFF);                  if x >= 0x8000 then x = x - 0x10000 end
-                    local y = bit.band(bit.rshift(L, 16), 0xFFFF);  if y >= 0x8000 then y = y - 0x10000 end
+                    local x = (L & 0xFFFF);                  if x >= 0x8000 then x = x - 0x10000 end
+                    local y = ((L >> 16) & 0xFFFF);  if y >= 0x8000 then y = y - 0x10000 end
                     x, y = unscale(x), unscale(y)   -- physical client -> logical for hit test
                     rec.mouseCb(rec.self, "mouseDown", hitTest(rec, x, y), x, y)
                 end)
@@ -315,7 +309,6 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
         end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end
-    jit.off(wndProcFn, true)
     local wndProc = ffi.cast("WNDPROC", wndProcFn)
 -- END --
 

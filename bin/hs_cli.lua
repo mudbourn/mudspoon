@@ -1,4 +1,6 @@
--- hs command line client for the mudspoon host (pure LuaJIT FFI) --
+-- hs command line client for the mudspoon host
+
+package.path = ((arg[0] or ""):gsub("[^/\\]*$", "")) .. "../compat/?.lua;" .. package.path
 
 local ffi = require("ffi")
 
@@ -170,7 +172,7 @@ local function send(source)
     )
 
     if ok == 0 then
-        io.stderr:write("hs: the host did not answer within " .. (TIMEOUT_MS / 1000) .. " seconds\n")
+        io.stderr:write("hs: the host did not answer within " .. (TIMEOUT_MS // 1000) .. " seconds\n")
         os.exit(4)
     end
 

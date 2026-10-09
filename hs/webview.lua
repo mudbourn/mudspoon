@@ -1,53 +1,6 @@
--- hs.webview  (WebView2 binding via LuaJIT FFI + COM) --
-    -- A Hammerspoon-shaped hs.webview backed by the Microsoft Edge WebView2 runtime,
-    -- driven from LuaJIT over raw COM (no C shim). This is the largest module in the
-    -- port: it owns a layered top-most host window (modelled on hs/alert/window.lua),
-    -- the async WebView2 environment/controller bring-up, the JS<->Lua message bridge,
-    -- and the full webview object surface mudscript consumes.
-    --
-    -- ============================ UNVERIFIED SCAFFOLD ============================
-    -- This has been PARSE-checked only (luajit -bl). It has NEVER been compiled
-    -- against user32/WebView2Loader or run on Windows. Everything below about COM
-    -- vtable slot orders, HRESULT handling, async pump timing, and the presence of
-    -- the WebView2 runtime is a REASONED ASSUMPTION the human must validate on the
-    -- rig. The riskiest assumptions are called out inline with "RISK:".
-    -- ============================================================================
-    --
-    -- Depends on hs.foundation for: shared Win32 typedefs (HWND, RECT, DWORD, BOOL,
-    -- WNDPROC, WNDCLASSEXA, MSG ...), the loaded libs (host.C.user32/.kernel32/.gdi32),
-    -- host.moduleHandle, and -- critically -- the ONE runloop (host.run) that pumps the
-    -- message loop WebView2's async completion handlers are delivered on. This module
-    -- installs NO hook and runs NO loop of its own (frozen shared rule).
-    --
-    -- Per the frozen cdef-ownership rule, foundation owns every shared TYPE. This file
-    -- ffi.cdef's ONLY: its own COM interface/vtable structs, the WebView2Loader export,
-    -- the COM/string/window FUNCTIONS it calls that foundation does not declare, and
-    -- unique typedefs (HRESULT, ULONG, LPCWSTR, EventRegistrationToken). It never
-    -- re-typedef's a foundation type.
-    --
-    -- NOTE: hs/init.lua is FROZEN and does NOT wire hs.webview (it was not an A-G
-    -- packet). Consumers require("hs.webview") directly.
-    --
-    -- -------------------------- The async bring-up shape --------------------------
-    -- WebView2 creation is asynchronous and multi-step. new() returns a usable object
-    -- SYNCHRONOUSLY, but the underlying CoreWebView2 is not ready until two round trips
-    -- through the runloop complete:
-    --
-    --   1. new() creates the host HWND immediately, then calls
-    --      CreateCoreWebView2EnvironmentWithOptions(NULL, NULL, NULL, envHandler).
-    --   2. The runloop pumps; envHandler:Invoke(hr, environment) fires. We call
-    --      environment->CreateCoreWebView2Controller(hwnd, ctrlHandler).
-    --   3. The runloop pumps; ctrlHandler:Invoke(hr, controller) fires. We call
-    --      controller->get_CoreWebView2(&core), wire the WebMessageReceived handler,
-    --      set bounds/visibility, and FLUSH the deferred-op queue.
-    --
-    -- Any html()/url()/evaluateJavaScript()/show()/frame() call made before step 3 is
-    -- QUEUED (self._queue) and replayed in order once the core is live. Calls after
-    -- step 3 run immediately. delete() is idempotent and safe at any stage.
--- END --
+-- hs.webview over WebView2 and COM
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 -- Foundation: shared types + loaded libs + module handle + the one runloop. --
     local host = require("hs.foundation")
@@ -129,7 +82,7 @@ local bit = require("bit")
         -- RPC_E_CHANGED_MODE (already inited with another model) is benign, ignored.
         Ole.CoInitializeEx(nil, 0x2)  -- COINIT_APARTMENTTHREADED
         trace("ensureLibs: WebView2Loader + ole32 loaded, CoInitializeEx(STA) done"
-              .. " [LuaJIT " .. (ffi.abi("64bit") and "64-bit" or "32-bit")
+              .. " [" .. _VERSION .. " " .. (ffi.abi("64bit") and "64-bit" or "32-bit")
               .. ", win=" .. tostring(ffi.abi("win")) .. "]")
     end
 -- END --
@@ -462,10 +415,6 @@ int     SetWindowRgn(HWND, HRGN, BOOL);
 -- END --
 
 -- Module-level keepalive for EVERY COM callback + backing cdata --
-    -- THE #1 LuaJIT FFI FOOTGUN (foundation + screen.lua both note it): a collected
-    -- ffi.cast callback, or a collected vtable/struct a live COM object still points
-    -- at, is a hard crash. Everything a WebView2 object may call back into is anchored
-    -- here for the whole process lifetime. We never remove entries.
     local ALIVE = {}
     local function keep(x) ALIVE[#ALIVE + 1] = x; return x end
 -- END --
@@ -560,9 +509,9 @@ int     SetWindowRgn(HWND, HRGN, BOOL);
         U.SetWindowLongA(hwnd, GWL_STYLE, ffi.cast("long", style))
 
         -- Extended style: always layered+topmost+toolwindow; NOACTIVATE if requested.
-        local ex = bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW)
-        if bit.band(mask, windowMasks.nonactivating) ~= 0 then
-            ex = bit.bor(ex, EX_NOACTIVATE)
+        local ex = (EX_LAYERED | EX_TOPMOST | EX_TOOLWINDOW)
+        if (mask & windowMasks.nonactivating) ~= 0 then
+            ex = (ex | EX_NOACTIVATE)
         end
         U.SetWindowLongA(hwnd, GWL_EXSTYLE, ffi.cast("long", ex))
     end
@@ -718,11 +667,23 @@ webview.usercontent = usercontent
         return '<base href="' .. u .. '">'
     end
 
-    -- Base tag, theme font faces and bridge shim, inserted after <head> or prepended
+    -- Zero-specificity overlay-style scrollbar default that any page rule overrides
+    local SCROLLBAR_STYLE = table.concat({
+        "<style id=\"_mudspoon-scrollbar\">",
+        ":where(*)::-webkit-scrollbar{width:8px;height:8px;background:transparent}",
+        ":where(*)::-webkit-scrollbar-track{background:transparent}",
+        ":where(*)::-webkit-scrollbar-corner{background:transparent}",
+        ":where(*)::-webkit-scrollbar-button{display:none;width:0;height:0}",
+        ":where(*)::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:4px;border:2px solid transparent;background-clip:padding-box}",
+        ":where(*)::-webkit-scrollbar-thumb:hover{background-color:rgba(128,128,128,.7)}",
+        "</style>",
+    })
+
+    -- Base tag, scrollbar default, theme font faces and bridge shim, inserted after <head> or prepended
     local function injectHead(str, baseURL)
         if type(str) ~= "string" then return str end
 
-        local inject = baseTag(baseURL) .. fonts.styleTag() .. BRIDGE_SHIM
+        local inject = baseTag(baseURL) .. SCROLLBAR_STYLE .. fonts.styleTag() .. BRIDGE_SHIM
 
         if str:find("<head", 1, true) then
             return (str:gsub("(<head[^>]*>)", function(h) return h .. inject end, 1))
@@ -795,7 +756,7 @@ webview.usercontent = usercontent
             local result, err
             if hr < 0 then
                 err = {
-                    NSLocalizedDescription = string.format("ExecuteScript failed (0x%08X)", bit.band(hr, 0xFFFFFFFF)),
+                    NSLocalizedDescription = string.format("ExecuteScript failed (0x%08X)", (hr & 0xFFFFFFFF)),
                     code = hr
                 }
             elseif resultPtr ~= nil then
@@ -830,7 +791,7 @@ webview.usercontent = usercontent
                 execPending[tonumber(ffi.cast("uintptr_t", handler))] = nil
 
                 pcall(callback, nil, {
-                    NSLocalizedDescription = string.format("ExecuteScript failed (0x%08X)", bit.band(hr, 0xFFFFFFFF)),
+                    NSLocalizedDescription = string.format("ExecuteScript failed (0x%08X)", (hr & 0xFFFFFFFF)),
                     code = hr
                 })
             end
@@ -878,7 +839,7 @@ webview.usercontent = usercontent
     function Webview:bringToFront()
         if self._deleted then return self end
         U.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                       bit.bor(SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW))
+                       (SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
         return self
     end
 
@@ -908,7 +869,7 @@ webview.usercontent = usercontent
         if not self._deleted then
             local z = (n >= 0) and HWND_TOPMOST or HWND_NOTOPMOST
             U.SetWindowPos(self._hwnd, z, 0, 0, 0, 0,
-                           bit.bor(SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE))
+                           (SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE))
         end
         return self
     end
@@ -938,9 +899,9 @@ webview.usercontent = usercontent
         if not self._deleted then
             local ex = U.GetWindowLongA(self._hwnd, GWL_EXSTYLE)
             if self._allowTextEntry then
-                ex = bit.band(tonumber(ex), bit.bnot(EX_NOACTIVATE))
+                ex = (tonumber(ex) & (~EX_NOACTIVATE))
             else
-                ex = bit.bor(tonumber(ex), EX_NOACTIVATE)
+                ex = (tonumber(ex) | EX_NOACTIVATE)
             end
             U.SetWindowLongA(self._hwnd, GWL_EXSTYLE, ffi.cast("long", ex))
         end
@@ -1214,12 +1175,14 @@ webview.usercontent = usercontent
         envObj.lpVtbl = envVt
         self._envObj = envObj
 
-        -- Kick it off. NULL browserExecutableFolder + NULL userDataFolder => the
-        -- Evergreen runtime with a default per-user data folder. RISK: if the app
-        -- has no write access to the default folder, creation fails asynchronously
-        -- (surfaced as hr != S_OK above); pass an explicit temp folder if so.
+        -- Evergreen runtime with a per-user data folder under LOCALAPPDATA
+        local dataDir = toWide((os.getenv("LOCALAPPDATA") or os.getenv("TEMP") or ".") .. "\\Hammerspoon\\WebView2")
+
+        keep(dataDir)
+
         trace("startBringUp: CreateCoreWebView2EnvironmentWithOptions (async kickoff)")
-        local hr = Loader.CreateCoreWebView2EnvironmentWithOptions(nil, nil, nil, envObj)
+
+        local hr = Loader.CreateCoreWebView2EnvironmentWithOptions(nil, dataDir, nil, envObj)
         trace("startBringUp: kickoff returned hr=" .. tostring(tonumber(hr))
               .. " (waiting for env Invoke on the runloop)")
         if tonumber(hr) < 0 then
@@ -1247,8 +1210,8 @@ webview.usercontent = usercontent
         -- Glass mode drops EX_LAYERED: per-pixel alpha comes from the DWM glass frame
         -- below, and LWA_ALPHA would flatten it. Fades switch to CSS opacity (see :alpha).
         local exStyle = GLASS
-            and bit.bor(EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
-            or  bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
+            and (EX_TOPMOST | EX_TOOLWINDOW | EX_NOACTIVATE)
+            or  (EX_LAYERED | EX_TOPMOST | EX_TOOLWINDOW | EX_NOACTIVATE)
 
         local hwnd = U.CreateWindowExA(exStyle, classBuf, "", WS_POPUP,
                                        logi(r.x), logi(r.y), logi(r.w), logi(r.h),
@@ -1337,50 +1300,6 @@ webview.usercontent = usercontent
         startBringUp(self)
         return self
     end
-
-    -- CreateWindowExA (above) synchronously dispatches WM_NCCREATE/WM_CREATE to our
-    -- class wndProc -- an ffi.cast callback -- BEFORE it returns. LuaJIT cannot enter
-    -- a callback from JIT-compiled mcode ("PANIC: ... bad callback"), and jit.off on
-    -- the callback body does NOT help: the offending trace is the CALLER that makes
-    -- the C call (see hs/foundation.lua's host.run note). At boot the shell/loading
-    -- webviews are created cold, but a popout opened later runs webview.new while the
-    -- panel-open path is JIT-warm -> the "first open of the browse panel" fastfail.
-    -- Keeping webview.new interpreted aborts any trace before the CreateWindowExA
-    -- C-call, so the callback is only ever entered from the interpreter.
-    jit.off(webview.new)
-
-    -- Same hazard, same fix for every OTHER window op whose Win32 call synchronously
-    -- re-enters our class wndProc before returning:
-    --   ShowWindow                (:show/:hide)                -> WM_SHOWWINDOW/paint
-    --   SetWindowPos              (:bringToFront/:level)       -> WM_WINDOWPOS*/paint
-    --   MoveWindow                (pushBounds, :frame/:setFrame)-> WM_WINDOWPOS*/WM_SIZE
-    --   DestroyWindow             (:delete)                    -> WM_DESTROY/WM_NCDESTROY
-    --   SetLayeredWindowAttributes(:alpha)                     -> WM_ERASEBKGND
-    -- :alpha is the DANGEROUS one: the shell/loading/curtain fades animate it from a
-    -- ~8ms repeating timer (30 steps/open), so that closure goes JIT-hot within a few
-    -- opens and then makes the SetLayeredWindowAttributes C-call from compiled mcode --
-    -- which our wndProc receives as a synchronous WM_ERASEBKGND ("alpha-change", see
-    -- the wndProc note) -> "bad callback" fastfail on shell/panel open. (This is why
-    -- an earlier version that left :alpha JIT-eligible still crashed on open.)
-    -- SetWindowLongA/GetWindowLongA in :allowTextEntry/:windowStyle do NOT dispatch to
-    -- the wndProc and are one-shot config, so they stay JIT-eligible. pushBounds is the
-    -- sole C-call site for :frame/:setFrame, so guarding it covers both.
-    jit.off(pushBounds)
-    jit.off(Webview.show)
-    jit.off(Webview.hide)
-    jit.off(Webview.bringToFront)
-    jit.off(Webview.level)
-    jit.off(Webview.delete)
-    jit.off(Webview.alpha)
-    -- Corner rounding: SetWindowRgn (applyCornerRegion) dispatches WM_WINDOWPOS*/
-    -- WM_NCCALCSIZE and DwmSetWindowAttribute (Webview.cornerRadius) can dispatch to
-    -- the wndProc synchronously -- both are C-calls that re-enter the FFI callback, so
-    -- both must stay interpreted. applyCornerRegion is ALSO reached from the (already
-    -- off) pushBounds, but jit.off on the caller does NOT cover a separately-compiled
-    -- callee, so it needs its own guard: without it a reload (JIT already warm) hits
-    -- "bad callback" on the first shell frame while a cold fresh boot slips through.
-    jit.off(applyCornerRegion)
-    jit.off(Webview.cornerRadius)
 -- END --
 
 return webview

@@ -4,7 +4,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host = require("hs.foundation")
 
@@ -57,7 +56,7 @@ local hInst = host.moduleHandle
     local WS_POPUP        = 0x80000000
     local EX_TOPMOST      = 0x00000008
     local EX_TOOLWINDOW   = 0x00000080
-    local EX_STYLE        = bit.bor(EX_TOPMOST, EX_TOOLWINDOW)
+    local EX_STYLE        = (EX_TOPMOST | EX_TOOLWINDOW)
 
     local SW_HIDE         = 0
     local SW_SHOW         = 5
@@ -89,7 +88,7 @@ local hInst = host.moduleHandle
     local DT_SINGLELINE   = 0x00000020
     local DT_NOPREFIX     = 0x00000800
     local DT_END_ELLIPSIS = 0x00008000
-    local DT_TEXT         = bit.bor(DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX, DT_END_ELLIPSIS)
+    local DT_TEXT         = (DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS)
 
     local SRCCOPY         = 0x00CC0020
     local TRANSPARENT     = 1
@@ -155,7 +154,7 @@ local hInst = host.moduleHandle
     local function dropLastChar(s)
         local i = #s
 
-        while i > 1 and bit.band(s:byte(i), 0xC0) == 0x80 do i = i - 1 end
+        while i > 1 and (s:byte(i) & 0xC0) == 0x80 do i = i - 1 end
 
         return s:sub(1, i - 1)
     end
@@ -324,7 +323,7 @@ end
 
         self._m = m
 
-        U.SetWindowPos(self._hwnd, nil, self._x or 0, self._y or 0, m.w, m.h, bit.bor(SWP_NOACTIVATE, SWP_NOZORDER))
+        U.SetWindowPos(self._hwnd, nil, self._x or 0, self._y or 0, m.w, m.h, (SWP_NOACTIVATE | SWP_NOZORDER))
         U.InvalidateRect(self._hwnd, nil, 0)
     end
 
@@ -518,10 +517,10 @@ end
 -- END --
 
 -- Window procedure --
-    local function loWord(v) return bit.band(tonumber(v), 0xFFFF) end
+    local function loWord(v) return (tonumber(v) & 0xFFFF) end
 
     local function signedHiWord(v)
-        local h = bit.band(bit.rshift(tonumber(v), 16), 0xFFFF)
+        local h = ((tonumber(v) >> 16) & 0xFFFF)
 
         if h >= 0x8000 then h = h - 0x10000 end
 
@@ -627,8 +626,6 @@ end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end
 
-    jit.off(wndProcFn, true)
-
     local wndProc = ffi.cast("WNDPROC", wndProcFn)
 
     local classBuf = ffi.new("char[?]", #CLASS + 1)
@@ -703,7 +700,7 @@ end
             self._y = math.floor(f.y * m.s + f.h * m.s * TOP_FRACTION)
         end
 
-        U.SetWindowPos(self._hwnd, nil, self._x, self._y, m.w, m.h, bit.bor(SWP_NOACTIVATE, SWP_NOZORDER))
+        U.SetWindowPos(self._hwnd, nil, self._x, self._y, m.w, m.h, (SWP_NOACTIVATE | SWP_NOZORDER))
 
         self._visible = true
 

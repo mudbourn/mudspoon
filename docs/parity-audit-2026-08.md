@@ -22,10 +22,7 @@ real parity gap on an exercised path (LIVE).
 
 **Heuristic:** live gaps track *contract-shape surface and COM/vtable/stub
 complexity*, NOT call traffic. timer (144 `doAfter` calls) is parity-clean;
-webview (a handful of calls) has 2 live gaps. The JIT "bad callback" scar is a
-non-issue on every exercised path — timer never registers an FFI callback,
-canvas follows the `jit.off(wndProc)` + kept-cast pattern, and the real fix is
-`jit.off(host.run)` on the pump (`foundation.lua:498-505`).
+webview (a handful of calls) has 2 live gaps.
 
 ## LIVE gaps (pile-3), triaged least-obvious → most-worth-fixing-first
 

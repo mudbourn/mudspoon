@@ -1,12 +1,4 @@
--- hs.json  (leaf) --
-    -- Hammerspoon's hs.json.encode / hs.json.decode over a self-contained
-    -- pure-Lua codec. The consumer only ever encodes (compact and pretty) and
-    -- decodes, so read/write file helpers are intentionally omitted.
-    --
-    -- Leaf: no Foundation, no FFI, no C module. Runs on plain LuaJIT. Keeping it
-    -- dependency-free means config/state serialization works before any host
-    -- machinery is up.
--- END --
+-- hs.json encoder and decoder
 
 local json = {}
 
@@ -113,15 +105,7 @@ local json = {}
             end
         elseif t == "nil" then
             return "null"
-        elseif t == "cdata" then
-            -- LuaJIT-only: a raw FFI number (int64/uint64/double cdata) reaches here
-            -- when a Windows shim hands the config a number in cdata form -- Mac has a
-            -- plain Lua number for the same value, so NSJSONSerialization never sees
-            -- this case. Coerce numeric cdata to a Lua number so the payload encodes
-            -- identically to Mac; without this, ONE such value anywhere in a state
-            -- table threw and blanked the whole panel that carried it (e.g. the Settings/
-            -- Tools/Appearance/Profiles hydration payload). Non-numeric cdata is still
-            -- genuinely unencodable.
+        elseif t == "userdata" then
             local n = tonumber(v)
             if n then return encodeNumber(n) end
             error("hs.json: cannot encode non-numeric cdata value", 0)
@@ -159,7 +143,6 @@ local json = {}
         ['t']  = '\t',
     }
 
-    -- Encode a Unicode code point as UTF-8 bytes (LuaJIT has no utf8 lib).
     local function utf8Encode(cp)
         if cp < 0x80 then
             return string.char(cp)

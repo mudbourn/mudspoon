@@ -6,10 +6,14 @@ local function dirOf(path)
     return (path:gsub("[/\\][^/\\]*$", ""))
 end
 
-local exePath = "luajit.exe"
+local exePath = "lua.exe"
 
-if arg and arg[-1] then
-    exePath = arg[-1]
+if arg then
+    local index = 0
+
+    while arg[index - 1] do index = index - 1 end
+
+    exePath = arg[index] or exePath
 end
 
 local scriptDir = dirOf((arg and arg[0]) or ".")

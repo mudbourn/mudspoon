@@ -1,10 +1,9 @@
 # Builds installer\Output\Mudspoon-Setup.exe #
-    # Stages the host, LuaJIT and a deployed copy of mudscript, generates the icon
+    # Stages the host, the Lua runtime and a deployed copy of mudscript, generates the icon
     # and wizard images, then compiles Mudspoon.iss with Inno Setup 6.
     # Usage: powershell -ExecutionPolicy Bypass -File installer\build.ps1
 param(
-    [string]$Mudscript,
-    [string]$LuaJitDir = "C:\tools\luajit"
+    [string]$Mudscript
 )
 
 $ErrorActionPreference = "Stop"
@@ -191,7 +190,7 @@ Add-Type -AssemblyName System.Drawing
 
     foreach ($f in $topFiles) { Copy-Item (Join-Path $Repo $f) $app }
 
-    foreach ($d in @("hs", "bin")) {
+    foreach ($d in @("hs", "bin", "compat")) {
         Copy-Item (Join-Path $Repo $d) (Join-Path $app $d) -Recurse
     }
 
@@ -203,13 +202,13 @@ Add-Type -AssemblyName System.Drawing
     Copy-Item (Join-Path $Here "VERSION") $app
 # END #
 
-# Stage LuaJIT and its VC++ runtime DLL #
-    $lj = Join-Path $app "luajit"
-    New-Item -ItemType Directory -Force -Path $lj | Out-Null
+# Stage the Lua runtime #
+    $rt = Join-Path $app "runtime"
+    New-Item -ItemType Directory -Force -Path $rt | Out-Null
 
-    Copy-Item (Join-Path $LuaJitDir "luajit.exe") $lj
-    Copy-Item (Join-Path $LuaJitDir "lua51.dll") $lj
-    Copy-Item (Join-Path $env:SystemRoot "System32\vcruntime140.dll") $lj
+    foreach ($f in @("lua.exe", "lua54.dll", "cffi.dll")) {
+        Copy-Item (Join-Path $Repo "runtime\$f") $rt
+    }
 # END #
 
 # Stage mudscript with the Windows deploy script #

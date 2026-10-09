@@ -59,4 +59,4 @@ if command -v jq >/dev/null 2>&1; then
 fi
 echo
 echo "Next: copy this report next to the Windows one and diff them:"
-echo "   luajit test/diff_smoke.lua $OUT smoke_report_mudspoon.json"
+echo "   lua test/diff_smoke.lua $OUT smoke_report_mudspoon.json"

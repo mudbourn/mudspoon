@@ -1,42 +1,4 @@
--- hs.audiodevice  (Windows Core Audio via LuaJIT FFI + COM) --
-    -- A Hammerspoon-shaped hs.audiodevice backed by the Windows Core Audio MMDevice
-    -- API (IMMDeviceEnumerator / IMMDevice / IAudioEndpointVolume), driven from
-    -- LuaJIT over raw COM -- no C shim -- in the same spirit as hs/webview.lua.
-    --
-    -- The slice mudscript actually uses:
-    --   hs.audiodevice.defaultOutputDevice()      -> device (identity + volume)
-    --   hs.audiodevice.findOutputByName(name)      -> device | nil
-    --   device:name()                              -> friendly name string
-    --   device:volume()                            -> 0..100 | nil     (master scalar)
-    --   device:setVolume(n)                        -> device           (n in 0..100)
-    --   device:muted() / device:setMuted(bool)     -> bool / device
-    --
-    -- Depends on hs.foundation ONLY for shared Win32 TYPES (DWORD, BOOL, UINT) and the
-    -- loaded kernel32 handle. Per the frozen cdef-ownership rule foundation owns every
-    -- shared type; this file ffi.cdef's ONLY its own COM interface/vtable structs, the
-    -- unique GUID/PROPERTYKEY/PROPVARIANT structs, and the ole32 functions it calls.
-    --
-    -- CROSS-MODULE TYPE HYGIENE: hs/webview.lua ALSO does COM and typedefs HRESULT /
-    -- LPWSTR / LPCWSTR / ULONG. Either module may be the one loaded (or both). LuaJIT
-    -- errors on a DUPLICATE typedef in the shared C namespace, so this file introduces
-    -- NO named scalar typedef webview owns: it spells those inline (long, unsigned
-    -- short*, unsigned long). Only GUID / PROPERTYKEY / MUDS_PROPVARIANT and the
-    -- IMM*/IAudioEndpointVolume interface tags are declared here, and nothing else in
-    -- the tree declares them. Redeclaring an IDENTICAL extern function (CoTaskMemFree,
-    -- WideCharToMultiByte ...) is allowed by LuaJIT and harmless.
-    --
-    -- ============================ UNVERIFIED SCAFFOLD ============================
-    -- PARSE-checked reasoning only. Never compiled against ole32 or run on Windows.
-    -- The COM vtable slot orders (IMMDevice::Activate=3, IAudioEndpointVolume::
-    -- GetMasterVolumeLevelScalar=9, ...) and the PROPVARIANT layout are transcribed
-    -- from the MMDevice IDL by hand and MUST be validated on the rig. Riskiest points
-    -- are flagged inline with "RISK:".
-    -- ============================================================================
-    --
-    -- SINGLE THREAD: no hook, no loop, no thread. Every call is synchronous COM on the
-    -- runloop thread. There is nothing to poll -- volume/name are immediate queries --
-    -- so this module never touches host.schedule. It stays a leaf.
--- END --
+-- hs.audiodevice over Windows Core Audio and COM
 
 local ffi = require("ffi")
 
@@ -46,8 +8,6 @@ local ffi = require("ffi")
 -- END --
 
 -- ole32: COM apartment + object creation + task-memory free. --
-    -- ole32 is a system DLL, effectively always present. Loading it twice (hs.webview
-    -- may already have) is harmless in LuaJIT -- the C declarations are process-global.
     local Ole = ffi.load("ole32")
 -- END --
 

@@ -1,39 +1,7 @@
--- hs.pathwatcher  (ReadDirectoryChangesW via LuaJIT FFI, runloop-driven) --
-    -- A Hammerspoon-shaped hs.pathwatcher. The slice mudscript actually uses:
-    --   hs.pathwatcher.new(path, callback)   -- callback(paths, flagTables)
-    --   watcher:start()  -> watcher
-    --   watcher:stop()   -> watcher
-    -- callback receives the array of changed absolute paths and a parallel array of
-    -- Hammerspoon-style flag tables ({itemCreated=true}, {itemModified=true}, ...).
-    --
-    -- ------------------------- Single-thread integration --------------------------
-    -- Backed by ReadDirectoryChangesW in ASYNCHRONOUS (overlapped) mode, driven off
-    -- the ONE hs.foundation runloop -- NOT its own thread. start() opens the directory
-    -- with FILE_FLAG_OVERLAPPED, issues one ReadDirectoryChangesW against a manual-
-    -- reset event, and schedules a host.schedule() tick. Each tick does a zero-timeout
-    -- WaitForSingleObject on the event: when it signals, we GetOverlappedResult, parse
-    -- the FILE_NOTIFY_INFORMATION buffer, fire the callback, then RE-ISSUE the read.
-    -- No blocking wait ever happens on the runloop, so the pump stays responsive --
-    -- the same non-blocking-poll shape hs.task uses for its child process.
-    --
-    -- Depends on hs.foundation for shared Win32 TYPES (HANDLE, DWORD, BOOL, ULONG_PTR)
-    -- and the loaded kernel32 handle + the runloop. Per the frozen cdef-ownership rule
-    -- this file cdef's ONLY its own OVERLAPPED / FILE_NOTIFY_INFORMATION structs and
-    -- the kernel32 FUNCTIONS it calls. CloseHandle / WaitForSingleObject are ALSO
-    -- declared by hs.task and MultiByteToWideChar / WideCharToMultiByte by hs.webview;
-    -- those redeclarations are IDENTICAL, which LuaJIT allows (only a type MISMATCH
-    -- errors). Every unique symbol here (CreateFileW, ReadDirectoryChangesW, ...) is
-    -- declared nowhere else in the tree.
-    --
-    -- UNVERIFIED SCAFFOLD: PARSE-checked reasoning only, never run on Windows. The
-    -- FILE_NOTIFY_INFORMATION walk (NextEntryOffset chaining, FileNameLength in BYTES,
-    -- FileName at offset 12) and the overlapped completion timing are the riskiest
-    -- points -- flagged inline with "RISK:".
--- END --
+-- hs.pathwatcher over ReadDirectoryChangesW on the runloop
 
 local host = require("hs.foundation")
 local ffi  = host.ffi
-local bit  = host.bit
 local K    = host.C.kernel32
 
 -- Own FFI surface (unique structs + kernel32 fns; shared types come from Foundation) --
@@ -59,7 +27,7 @@ BOOL   ReadDirectoryChangesW(HANDLE, void*, DWORD, BOOL, DWORD, DWORD*, OVERLAPP
 BOOL   GetOverlappedResult(HANDLE, OVERLAPPED*, DWORD*, BOOL);
 unsigned long GetFileAttributesW(const unsigned short*);
 
-/* --- Identical redeclarations (also in hs.task / hs.webview; LuaJIT allows a match) --- */
+/* --- Shared declarations --- */
 DWORD WaitForSingleObject(HANDLE, DWORD);
 BOOL  CloseHandle(HANDLE);
 int   MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned short*, int);
@@ -83,7 +51,7 @@ int   WideCharToMultiByte(unsigned int, unsigned long, const unsigned short*, in
     local FILE_FLAG_OVERLAPPED       = 0x40000000
 
     -- What to watch for. Union of the changes Hammerspoon surfaces.
-    local FILTER = bit.bor(0x1, 0x2, 0x4, 0x8, 0x10, 0x40)
+    local FILTER = (0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x40)
     -- FILE_NAME | DIR_NAME | ATTRIBUTES | SIZE | LAST_WRITE | CREATION
 
     -- FILE_ACTION_* -> Hammerspoon flag table.
@@ -126,7 +94,7 @@ int   WideCharToMultiByte(unsigned int, unsigned long, const unsigned short*, in
     local function isDirectory(path)
         local attr = K.GetFileAttributesW(toWide(path))
         if attr == INVALID_FILE_ATTRIBUTES then return false end
-        return bit.band(attr, FILE_ATTRIBUTE_DIRECTORY) ~= 0
+        return (attr & FILE_ATTRIBUTE_DIRECTORY) ~= 0
     end
 
     local function normSlashes(p) return (p:gsub("/", "\\")) end
@@ -216,8 +184,8 @@ local pathwatcher = {}
     function Watcher:start()
         if self._running then return self end
 
-        local share = bit.bor(FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE)
-        local flags = bit.bor(FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED)
+        local share = (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        local flags = (FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)
         local h = K.CreateFileW(toWide(self._dir), FILE_LIST_DIRECTORY, share, nil,
                                 OPEN_EXISTING, flags, nil)
         if h == INVALID_HANDLE_VALUE then

@@ -67,9 +67,6 @@ LRESULT SendMessageTimeoutA(HWND, UINT, WPARAM, LPARAM, UINT, UINT, uintptr_t*);
     local CLASS            = "HammerspoonDistNot"
 -- END --
 
--- Live observers in THIS process. A started watcher is strongly referenced here
--- (as NSDistributedNotificationCenter retains its observers), so it stays alive
--- until :stop(); that is also why a table watcher needs no __gc on LuaJIT.
 local observers = {}
 
 -- Deliver one decoded note to every matching local observer. Called from the
@@ -85,8 +82,6 @@ local function dispatch(note)
 end
 
 -- Shared hidden message window (lazy: only when this process first observes) --
-    -- jit.off: a callback body must never be JIT-traced -- an error unwinding out of
-    -- compiled mcode across the FFI boundary panics LuaJIT (see hs.foundation).
     local function wndProcFn(hwnd, msg, wp, lp)
         if msg == WM_COPYDATA then
             local cds = ffi.cast("COPYDATASTRUCT*", lp)
@@ -100,7 +95,6 @@ end
         end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end
-    jit.off(wndProcFn, true)
     local wndProc = ffi.cast("WNDPROC", wndProcFn)
 
     local classBuf = ffi.new("char[?]", #CLASS + 1)

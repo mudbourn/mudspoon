@@ -27,7 +27,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 -- Foundation: shared types, the loaded user32/gdi32, the module instance handle. --
     local host  = require("hs.foundation")
@@ -66,7 +65,7 @@ HGDIOBJ SelectObject(HDC, HGDIOBJ);
     local EX_TOPMOST        = 0x00000008
     local EX_TOOLWINDOW     = 0x00000080  -- keep it out of the taskbar / alt-tab
     local EX_NOACTIVATE     = 0x08000000  -- never steal focus from the user
-    local EX_STYLE          = bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
+    local EX_STYLE          = (EX_LAYERED | EX_TOPMOST | EX_TOOLWINDOW | EX_NOACTIVATE)
 
     local SW_SHOWNOACTIVATE = 4
     local LWA_ALPHA         = 0x02
@@ -81,7 +80,7 @@ HGDIOBJ SelectObject(HDC, HGDIOBJ);
     local DT_VCENTER    = 0x00000004
     local DT_SINGLELINE = 0x00000020
     local DT_NOPREFIX   = 0x00000800
-    local DT_FORMAT     = bit.bor(DT_CENTER, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX)
+    local DT_FORMAT     = (DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
 
     local ROUND         = 20             -- corner radius, px
 
@@ -108,11 +107,6 @@ HGDIOBJ SelectObject(HDC, HGDIOBJ);
 -- END --
 
 -- Window procedure (module scope: the GC must never free this cast) --
-    -- A Lua error must NEVER unwind through this FFI boundary -- Windows calls it
-    -- from inside DispatchMessage and a throw here is a hard crash. So the paint
-    -- body is pcall-guarded; a bad paint yields a blank window, not a dead process.
-    -- jit.off: never JIT-trace a callback body -- an error unwinding out of compiled
-    -- mcode across the FFI boundary panics LuaJIT ("bad callback").
     local function wndProcFn(hwnd, msg, wp, lp)
         if msg == WM_PAINT then
             pcall(function()
@@ -154,7 +148,6 @@ HGDIOBJ SelectObject(HDC, HGDIOBJ);
         end
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end
-    jit.off(wndProcFn, true)
     local wndProc = ffi.cast("WNDPROC", wndProcFn)
 -- END --
 

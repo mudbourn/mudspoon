@@ -1,13 +1,12 @@
 -- mudspoon ground-breaking spike --
     -- Global keyboard hook, a Win32 message pump married to a Lua scheduler,
-    -- and a native alert window, all from one LuaJIT process.
+    -- and a native alert window, all from one process.
     -- Ctrl+Alt+K pops a fading alert and swallows the K. Ctrl+Alt+Q quits.
     -- Run on the Windows PC at the physical console, not over RDP.
 -- END --
 
 -- FFI Setup --
     local ffi = require("ffi")
-    local bit = require("bit")
 
     local U = ffi.load("user32")
     local K = ffi.load("kernel32")
@@ -118,7 +117,7 @@ BOOL    TextOutA(HDC, int, int, LPCSTR, int);
     local VK_Q              = 0x51
     local HIGH_BIT          = 0x8000
 
-    local EX_STYLE = bit.bor(EX_LAYERED, EX_TOPMOST, EX_TOOLWINDOW, EX_NOACTIVATE)
+    local EX_STYLE = (EX_LAYERED | EX_TOPMOST | EX_TOOLWINDOW | EX_NOACTIVATE)
 -- END --
 
 -- State --
@@ -262,7 +261,7 @@ BOOL    TextOutA(HDC, int, int, LPCSTR, int);
 
 -- Keyboard Hook --
     local function down(vk)
-        return bit.band(U.GetAsyncKeyState(vk), HIGH_BIT) ~= 0
+        return (U.GetAsyncKeyState(vk) & HIGH_BIT) ~= 0
     end
 
     -- Callback stays tiny: set a flag, return. See memory for why.

@@ -1,0 +1,40 @@
+diff --git a/src/ffi.cc b/src/ffi.cc
+index 14e3109..7c7b35f 100644
+--- a/src/ffi.cc
++++ b/src/ffi.cc
+@@ -141,6 +141,12 @@ static void cb_bind(ffi_cif *, void *ret, void *args[], void *data) {
+ 
+     if (fun->result().type() != ast::C_BUILTIN_VOID) {
+         lua_call(cd.L, int(fargs), 1);
++        if (lua_isnil(cd.L, -1) && fun->result().type() != ast::C_BUILTIN_RECORD) {
++            /* a callback that returns nothing reads as zero */
++            std::memset(ret, 0, sizeof(ffi_arg));
++            lua_pop(cd.L, 1);
++            return;
++        }
+         ffi::scalar_stor_t stor{};
+         std::size_t rsz;
+         void *rp = from_lua(
+@@ -402,7 +408,8 @@ static inline int push_int(
+         using U = T *;
+         actual_val = *U(value);
+     }
+-    if ((util::limit_digits<T>() <= util::limit_digits<LT>()) || lossy) {
++    if ((util::limit_digits<T>() <= util::limit_digits<LT>()) || lossy
++        || (sizeof(T) >= sizeof(lua_Integer) && T(-1) > T(0) && actual_val <= T(0x7FFFFFFFFFFFFFFFULL))) {
+         lua_pushinteger(L, lua_Integer(actual_val));
+         return 1;
+     }
+@@ -496,7 +503,12 @@ int to_lua(
+             }
+             /* pointers should be handled like large cdata, as they need
+              * to be represented as userdata objects on lua side either way
++             * (a NULL pointer is returned as nil, like a comparison to nil expects)
+              */
++            if (*static_cast<void * const *>(value) == nullptr) {
++                lua_pushnil(L);
++                return 1;
++            }
+             newcdata(L, tp, sizeof(void *)).as<void *>() =
+                 *static_cast<void * const *>(value);
+             return 1;

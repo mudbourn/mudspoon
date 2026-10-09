@@ -1,7 +1,6 @@
 local host = require("hs.foundation")
 local shims = require("hs.shims")
 local ffi  = host.ffi
-local bit  = host.bit
 local K    = host.C.kernel32
 
 -- Process and pipe FFI --
@@ -398,7 +397,7 @@ local task = {}
         local pi = ffi.new("PROCESS_INFORMATION")
 
         local ok = K.CreateProcessA(nil, cmdbuf, nil, nil, true,
-            bit.bor(CREATE_NO_WINDOW, CREATE_SUSPENDED), nil, nil, si, pi)
+            (CREATE_NO_WINDOW | CREATE_SUSPENDED), nil, nil, si, pi)
 
         closeHandle(wrOut)
 

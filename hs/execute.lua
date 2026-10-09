@@ -7,7 +7,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 local shims = require("hs.shims")
 
 -- Platform and shell resolution --
@@ -128,9 +127,6 @@ unsigned long WaitForSingleObject(void*, unsigned long);
 
         return table.concat(chunks)
     end
-
-    -- The wait loop calls back into Lua hooks, so it must stay interpreted
-    jit.off(waitDrain)
 
     -- Runs a command line with stdout piped back and returns output, exit code.
     -- Only the three std handles are inherited. nil, reason on a spawn failure.
@@ -266,7 +262,7 @@ unsigned long WaitForSingleObject(void*, unsigned long);
         local ok = pcall(ffi.cdef, [[
 int BCryptOpenAlgorithmProvider(void**, const unsigned short*, const unsigned short*, unsigned long);
 int BCryptCreateHash(void*, void**, uint8_t*, unsigned long, uint8_t*, unsigned long, unsigned long);
-int BCryptHashData(void*, const uint8_t*, unsigned long, unsigned long);
+int BCryptHashData(void*, const char*, unsigned long, unsigned long);
 int BCryptFinishHash(void*, uint8_t*, unsigned long, unsigned long);
 int BCryptDestroyHash(void*);
 ]])
@@ -381,8 +377,8 @@ int BCryptDestroyHash(void*);
                 end
             end
 
-            local word = bit.bor(bit.lshift(v[1], 18), bit.lshift(v[2], 12), bit.lshift(v[3], 6), v[4])
-            local bytes = string.char(bit.band(bit.rshift(word, 16), 255), bit.band(bit.rshift(word, 8), 255), bit.band(word, 255))
+            local word = ((v[1] << 18) | (v[2] << 12) | (v[3] << 6) | v[4])
+            local bytes = string.char(((word >> 16) & 255), ((word >> 8) & 255), (word & 255))
             out[#out + 1] = bytes:sub(1, 3 - pad)
         end
 

@@ -1,6 +1,5 @@
 -- probe: does the hook fire at all --
     local ffi = require("ffi")
-    local bit = require("bit")
 
     local U = ffi.load("user32")
     local K = ffi.load("kernel32")
@@ -50,7 +49,7 @@ DWORD   MsgWaitForMultipleObjects(DWORD, const HANDLE*, BOOL, DWORD, DWORD);
     local running = { on = true }
 
     local function down(vk)
-        return bit.band(U.GetAsyncKeyState(vk), HIGH_BIT) ~= 0
+        return (U.GetAsyncKeyState(vk) & HIGH_BIT) ~= 0
     end
 
     local cb = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)

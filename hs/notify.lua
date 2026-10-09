@@ -25,7 +25,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host = require("hs.foundation")
 require("hs.menubar")   -- owns NOTIFYICONDATAA / Shell_NotifyIconA / DestroyIcon cdefs
@@ -65,12 +64,9 @@ HICON LoadIconA(HINSTANCE, LPCSTR);
 -- END --
 
 -- Shared hidden message window + one default icon (lazy) --
-    -- jit.off: never JIT-trace a callback body (see hs.foundation) -- an error
-    -- unwinding out of compiled mcode across the FFI boundary panics LuaJIT.
     local function wndProcFn(hwnd, msg, wp, lp)
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end
-    jit.off(wndProcFn, true)
     local wndProc = ffi.cast("WNDPROC", wndProcFn)
 
     local classBuf = ffi.new("char[?]", #CLASS + 1)
@@ -123,7 +119,7 @@ local notify = {}
         nid.hWnd             = win
         nid.uID              = TRAY_UID
         nid.uCallbackMessage = CALLBACK_MSG
-        nid.uFlags           = bit.bor(NIF_MESSAGE, NIF_ICON, NIF_INFO)
+        nid.uFlags           = (NIF_MESSAGE | NIF_ICON | NIF_INFO)
         nid.hIcon            = defIcon
         nid.dwInfoFlags      = NIIF_INFO
         ffi.copy(nid.szInfoTitle, (self._title or "mudscript"):sub(1, 63))

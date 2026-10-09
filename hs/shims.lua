@@ -6,8 +6,6 @@
 
 local ffi = require("ffi")
 
-local bit = require("bit")
-
 local shims = {}
 
 -- Platform --
@@ -489,8 +487,8 @@ int MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned 
 
                 local header = ffi.cast("unsigned char*", ace[0])
                 local mask = ffi.cast("unsigned long*", header + 4)[0]
-                local inheritOnly = bit.band(header[1], INHERIT_ONLY_ACE) ~= 0
-                local writes = bit.band(mask, WRITE_MASK) ~= 0
+                local inheritOnly = (header[1] & INHERIT_ONLY_ACE) ~= 0
+                local writes = (mask & WRITE_MASK) ~= 0
 
                 if header[0] == 0 and not inheritOnly and writes
                     and not TRUSTED_SIDS[sidString(header + 8) or ""] then
@@ -511,7 +509,7 @@ int MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned 
 
         if attr == INVALID_ATTRIBUTES then return nil end
 
-        local isDir = bit.band(attr, FILE_ATTRIBUTE_DIRECTORY) ~= 0
+        local isDir = (attr & FILE_ATTRIBUTE_DIRECTORY) ~= 0
         local kind = isDir and "Directory" or "Regular File"
 
         if not adminOnly(winPath) then return "501 777 " .. kind end

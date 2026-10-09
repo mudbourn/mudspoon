@@ -2,6 +2,7 @@ data/*
 !data/ms_settings_default.json
 backups/
 ignore/
+*.WebView2/
 .DS_Store
 *.pem
 *.log

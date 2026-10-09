@@ -17,7 +17,7 @@
     -- injection round-trip in particular depends on the LL hook seeing our own
     -- SendInput, which RDP misreports.
     --
-    --   luajit smoke2.lua
+    --   runtime/lua.exe -E smoke2.lua
     --
     -- Expected: three checks print PASS, the cursor jumps once to screen centre
     -- and jumps back, no F13 leaks to the focused window, process exits 0. On any
@@ -28,7 +28,7 @@
 -- Resolve requires from this script's own directory, whatever the cwd is. --
     local here = (arg[0] or "smoke2.lua"):gsub("[^/\\]*$", "")
     if here == "" then here = "./" end
-    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. package.path
+    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. here .. "compat/?.lua;" .. package.path
 -- END --
 
 local hs = require("hs")

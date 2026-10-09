@@ -28,13 +28,9 @@ $runner  = Join-Path $repo "run_mudscript.lua"
 
 if (-not $Out) { $Out = Join-Path $repo "smoke_report_mudspoon.json" }
 
-# Locate luajit: PATH first, then the known install.
-$luajit = (Get-Command luajit -ErrorAction SilentlyContinue).Source
-if (-not $luajit) {
-    $cand = "$env:LOCALAPPDATA\Programs\LuaJIT\bin\luajit.exe"
-    if (Test-Path $cand) { $luajit = $cand }
-}
-if (-not $luajit) { Write-Error "luajit not found on PATH or in %LOCALAPPDATA%\Programs\LuaJIT\bin"; exit 2 }
+# Locate the bundled Lua runtime.
+$lua = Join-Path $repo "runtime\lua.exe"
+if (-not (Test-Path $lua)) { Write-Error "runtime\lua.exe not found. Run setup.ps1."; exit 2 }
 
 $env:MUDSPOON_SMOKE     = $smoke
 $env:MUDSPOON_SMOKE_OUT = $Out
@@ -43,7 +39,7 @@ if ($Webview) { $env:MUDSPOON_WEBVIEW   = "1" } else { Remove-Item Env:MUDSPOON_
 
 Push-Location $repo
 try {
-    & $luajit $runner
+    & $lua -E $runner
     $code = $LASTEXITCODE
 } finally {
     Pop-Location

@@ -36,7 +36,7 @@ $ErrorActionPreference = "Stop"
 
 # Host control #
     function Get-HostProcess {
-        Get-CimInstance Win32_Process -Filter "Name='luajit.exe'" |
+        Get-CimInstance Win32_Process -Filter "Name='lua.exe'" |
             Where-Object {
                 $_.CommandLine -match "run_mudscript" -and
                 $_.CommandLine.ToLower().Contains($Root.ToLower())
@@ -103,13 +103,13 @@ $ErrorActionPreference = "Stop"
             Copy-Shared $f (Join-Path $work (Split-Path $f -Leaf))
         }
 
-        $luajit = Join-Path $Root "luajit\luajit.exe"
+        $lua = Join-Path $Root "runtime\lua.exe"
         $ver = Join-Path $Root "VERSION"
         $info = @(
             "Hammerspoon for Windows: " + $(if (Test-Path $ver) { (Get-Content $ver -Raw).Trim() } else { "unknown" }),
             "Windows: " + [Environment]::OSVersion.VersionString,
             "Host running: " + [bool](Get-HostProcess),
-            "LuaJIT: " + $(try { (& $luajit -v) -join " " } catch { "unavailable" })
+            "Lua: " + $(try { (& $lua -E -v) -join " " } catch { "unavailable" })
         )
         Set-Content -Path (Join-Path $work "info.txt") -Value $info -Encoding ascii
 

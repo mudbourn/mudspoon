@@ -79,7 +79,7 @@ int BCryptDestroyKey(void*);
 
     -- Hex digest to raw bytes
     local function hexToBytes(hex)
-        local n = #hex / 2
+        local n = #hex // 2
         local buf = ffi.new("uint8_t[?]", n)
 
         for i = 0, n - 1 do

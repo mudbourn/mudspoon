@@ -1,6 +1,6 @@
 # mudspoon
 
-A Hammerspoon compatibility layer for Windows. A standalone LuaJIT host
+A Hammerspoon compatibility layer for Windows. A standalone Lua 5.4 host
 implements the `hs.*` API through FFI calls to `user32`, `kernel32` and `gdi32`,
 so tools written against Hammerspoon run unmodified on Windows. mudscript is the
 first consumer.
@@ -32,7 +32,7 @@ rules.
 
 ## Installing
 
-`installer\build.ps1` stages the host, LuaJIT and a deployed copy of mudscript,
+`installer\build.ps1` stages the host, the Lua runtime and a deployed copy of mudscript,
 then compiles `installer\Output\Mudspoon-Setup.exe` with Inno Setup 6.
 
 ```
@@ -41,15 +41,15 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1
 
 The installer puts everything under `%LOCALAPPDATA%\Mudspoon`:
 
-- `app\`: the host, LuaJIT and the launch scripts.
+- `app\`: the host, the Lua runtime and the launch scripts.
 - `.hammerspoon\`: the mudscript config the host boots from. User data in
   `.hammerspoon\data` survives updates and uninstall.
 
 ## Running
 
 Double-click `Mudspoon.cmd`. On first run `launch.ps1` installs anything missing
-with winget: LuaJIT and the VC++ runtime, the WebView2 runtime that draws every
-UI window, and Git for Windows as a POSIX shell. It then starts the host
+with winget: the WebView2 runtime that draws every UI window, and Git for
+Windows as a POSIX shell. It then starts the host
 windowless and detached, with the watchdog beside it.
 
 | Flag | Effect |
@@ -74,14 +74,23 @@ the Guardian trusted hash.
 
 ## Setup from a checkout
 
-`setup.ps1` installs LuaJIT with winget and pins it to `C:\tools\luajit`.
+`setup.ps1` checks the Lua runtime in `runtime\` and loads its `ffi` module.
 
 ```
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-`setup.sh` builds LuaJIT from source with MSVC in Git Bash, for machines
-without winget.
+`setup.sh` rebuilds `runtime\` from source in Git Bash with a MinGW-w64 toolchain.
+It builds Lua 5.4.7, libffi 3.4.6 and cffi-lua, patched by
+`runtime\cffi-lua.patch`.
+
+## Runtime
+
+`runtime\lua.exe` is stock Lua 5.4 and `runtime\cffi.dll` is cffi-lua, which
+provides the `ffi` module. `compat\ffi.lua` is what `require("ffi")` loads. It
+returns cffi-lua and makes `tonumber` read 64-bit cdata. The patch makes a NULL
+pointer read as `nil` and an unsigned 64-bit value that fits in 63 bits read as
+a Lua integer. Every launcher starts the host as `runtime\lua.exe -E`.
 
 ## Testing
 

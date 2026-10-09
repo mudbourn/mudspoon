@@ -12,8 +12,7 @@ $ErrorActionPreference = "Stop"
 
 # Config #
     $Root       = $PSScriptRoot
-    $InstallDir = "C:\tools\luajit"
-    $Bundled    = Join-Path $Root "luajit\luajit.exe"
+    $Runtime    = Join-Path $Root "runtime\lua.exe"
 
     # WebView2 runtime product GUID
     $WV2_GUID   = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -34,65 +33,6 @@ $ErrorActionPreference = "Stop"
         Info "installing $id ..."
 
         winget install --id $id --silent --accept-source-agreements --accept-package-agreements
-    }
-# END #
-
-# Resolve luajit.exe #
-    function Find-LuaJITExe {
-        if (Test-Path $Bundled) { return $Bundled }
-
-        if (Have luajit) { return (Get-Command luajit).Source }
-
-        if (Test-Path "$InstallDir\luajit.exe") { return "$InstallDir\luajit.exe" }
-
-        return $null
-    }
-
-    # Installs LuaJIT with winget and pins it into the install folder
-    function Install-LuaJIT {
-        Winget-Install "Microsoft.VCRedist.2015+.x64"
-
-        Winget-Install "DEVCOM.LuaJIT"
-
-        $roots = @(
-            "$env:LOCALAPPDATA\Programs\LuaJIT",
-            "$env:ProgramFiles",
-            "${env:ProgramFiles(x86)}",
-            "$env:LOCALAPPDATA\Microsoft\WinGet\Packages",
-            "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
-        )
-
-        $exe = $null
-
-        foreach ($r in $roots) {
-            if (Test-Path $r) {
-                $hit = Get-ChildItem $r -Recurse -Filter luajit.exe -ErrorAction SilentlyContinue |
-                       Select-Object -First 1
-
-                if ($hit) { $exe = $hit.FullName; break }
-            }
-        }
-
-        if (-not $exe) {
-            throw "LuaJIT installed but no luajit.exe was placed. Build from source with setup.sh."
-        }
-
-        New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-
-        $srcDir = Split-Path $exe
-
-        Copy-Item "$srcDir\luajit.exe" $InstallDir -Force
-
-        Get-ChildItem $srcDir -Filter *.dll -ErrorAction SilentlyContinue |
-            Copy-Item -Destination $InstallDir -Force
-
-        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-
-        if ($userPath -notlike "*$InstallDir*") {
-            [Environment]::SetEnvironmentVariable("Path", "$userPath;$InstallDir", "User")
-        }
-
-        return "$InstallDir\luajit.exe"
     }
 # END #
 
@@ -133,15 +73,13 @@ $ErrorActionPreference = "Stop"
 # END #
 
 # Dependency preflight #
-    $luajit = Find-LuaJITExe
+    $lua = $Runtime
+
+    if (-not (Test-Path $lua)) {
+        throw "runtime\lua.exe not found. Run setup.ps1 to check the Lua runtime folder."
+    }
 
     if (-not $SkipDeps) {
-        if (-not $luajit) {
-            Info "LuaJIT not found -- installing (first-run setup) ..."
-
-            $luajit = Install-LuaJIT
-        }
-
         if (-not $NoWebview -and -not (Have-WebView2)) {
             Info "WebView2 runtime missing (needed for the shell + loading UI) -- installing ..."
 
@@ -161,20 +99,7 @@ $ErrorActionPreference = "Stop"
         }
     }
 
-    if (-not $luajit) {
-        throw "luajit.exe not found and -SkipDeps was set. Re-run without -SkipDeps, or run setup.ps1."
-    }
-
-    # Reinstalls the VC++ runtime when luajit fails to start
-    try {
-        & $luajit -v | Out-Null
-    } catch {
-        Warn "luajit failed to start -- (re)installing the VC++ runtime it links ..."
-
-        Winget-Install "Microsoft.VCRedist.2015+.x64"
-
-        & $luajit -v | Out-Null
-    }
+    & $lua -E -v | Out-Null
 # END #
 
 # Legacy Guardian task check #
@@ -213,7 +138,7 @@ $ErrorActionPreference = "Stop"
 
         Push-Location $Root
 
-        try { & $luajit $entry } finally { Pop-Location }
+        try { & $lua -E $entry } finally { Pop-Location }
 
         exit $LASTEXITCODE
     } else {
@@ -226,7 +151,7 @@ $ErrorActionPreference = "Stop"
         # Seeds a fresh heartbeat for the watchdog
         try { Set-Content -Path $hbFile -Value "start" -Encoding utf8 } catch {}
 
-        $hostProc = Start-Process -FilePath $luajit -ArgumentList $entry `
+        $hostProc = Start-Process -FilePath $lua -ArgumentList @("-E", "`"$entry`"") `
                       -WorkingDirectory $Root -WindowStyle Hidden -PassThru
 
         # Starts the watchdog beside the host

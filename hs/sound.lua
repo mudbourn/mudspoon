@@ -12,9 +12,7 @@ local ffi  = require("ffi")
 local host = require("hs.foundation")
 local task = require("hs.task")
 
--- Locate our own interpreter + the helper script --
-    -- The host process IS luajit.exe, so GetModuleFileNameA(NULL) yields the exact
-    -- interpreter to relaunch for the helper -- no PATH assumption, no launcher env var.
+-- Locates our own interpreter and the helper script --
     ffi.cdef[[ unsigned long GetModuleFileNameA(void*, char*, unsigned long); ]]
     local K = host.C.kernel32
 
@@ -22,9 +20,9 @@ local task = require("hs.task")
         local buf = ffi.new("char[?]", 1024)
         local n   = K.GetModuleFileNameA(nil, buf, 1024)
         if n and n > 0 then return ffi.string(buf, n) end
-        return "luajit"                      -- fall back to PATH resolution
+        return "lua"
     end
-    local LUAJIT = selfExe()
+    local LUA_EXE = selfExe()
 
     -- hs.soundhelper.lua sits next to this file.
     local thisFile   = (debug.getinfo(1, "S").source or ""):gsub("^@", "")
@@ -70,7 +68,7 @@ local sound = {}
         self._stopping = false
 
         local volArg = tostring(math.floor((self._volume or 1) * 100 + 0.5))
-        local t = task.new(LUAJIT, function(_code)
+        local t = task.new(LUA_EXE, function(_code)
             if self._loop and not self._stopping then
                 self._offset = 0
                 self:play()
@@ -78,7 +76,7 @@ local sound = {}
             end
             self._offset = 0
             fireStop(self)
-        end, { HELPER, volArg, self._path })
+        end, { "-E", HELPER, volArg, self._path })
         if t and t:start() then
             self._task = t
             self._startedAt = host.now()

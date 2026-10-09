@@ -1,40 +1,7 @@
--- hs.websocket  (RFC 6455 client over Winsock via LuaJIT FFI) --
-    -- A Hammerspoon-shaped hs.websocket client, built on a raw non-blocking Winsock
-    -- (ws2_32) socket. The slice mudscript actually uses:
-    --   hs.websocket.new(url, callback)   -- callback(event, message)
-    --   ws:send(message)                  -- sends a text frame
-    --   ws:close()                        -- closes the connection
-    -- callback `event` is one of: "open", "received", "closed", "fail", "pong"
-    -- (Hammerspoon's status strings). "received" carries the message payload.
-    --
-    -- ------------------------- Single-thread integration --------------------------
-    -- mudspoon is ONE thread + ONE message pump (hs.foundation). This client owns NO
-    -- thread and installs NO loop: the socket is non-blocking and every stage --
-    -- connect completion, the HTTP upgrade handshake, and frame I/O -- is advanced
-    -- from a repeating host.schedule() tick, exactly like hs.task polls its child.
-    -- new() returns synchronously; "open" arrives on a later tick.
-    --
-    -- Depends on hs.foundation for its bit library and the ONE runloop only. Winsock
-    -- and its structs are unique to this module, so the entire FFI surface below is
-    -- ours to cdef; nothing here re-declares a foundation type.
-    --
-    -- --------------------------------- SHORTCUTS ----------------------------------
-    --  * TLS / wss:// is NOT implemented. A wss:// URL fails immediately with an
-    --    ("fail", "...") callback -- there is no Schannel/OpenSSL handshake here.
-    --    ws:// is sufficient for the localhost/LAN bridge mudscript uses.
-    --  * The Sec-WebSocket-Accept response header is NOT validated (that needs SHA-1).
-    --    We only require the "101" status line -- adequate for a trusted local peer.
-    --  * Received-frame reassembly supports continuation frames and 64-bit lengths up
-    --    to the low 32 bits; a single message is buffered whole before "received".
-    --
-    -- UNVERIFIED SCAFFOLD: PARSE-checked reasoning only, never run on Windows. The
-    -- Winsock struct layouts (addrinfo, fd_set) and the non-blocking connect/select
-    -- dance are the riskiest points -- flagged inline with "RISK:".
--- END --
+-- hs.websocket client over Winsock on the runloop
 
 local host = require("hs.foundation")
 local ffi  = host.ffi
-local bit  = host.bit
 
 -- Winsock FFI (all unique to this module) --
     local WS = ffi.load("ws2_32")
@@ -69,7 +36,7 @@ int    select(int, ws_fd_set*, ws_fd_set*, ws_fd_set*, const ws_timeval*);
     local AF_INET        = 2
     local SOCK_STREAM    = 1
     local IPPROTO_TCP    = 6
-    local FIONBIO        = bit.tobit(0x8004667E)
+    local FIONBIO        = -2147195266
     local WSAEWOULDBLOCK = 10035
     local SOCKET_ERROR   = -1
     local INVALID_SOCKET = ffi.cast("SOCKET", ffi.cast("intptr_t", -1))
@@ -129,11 +96,11 @@ int    select(int, ws_fd_set*, ws_fd_set*, ws_fd_set*, const ws_timeval*);
         local out = {}
         for i = 1, #data, 3 do
             local a, b, c = data:byte(i, i + 2)
-            local n = bit.lshift(a, 16) + bit.lshift(b or 0, 8) + (c or 0)
-            local c1 = bit.band(bit.rshift(n, 18), 0x3F)
-            local c2 = bit.band(bit.rshift(n, 12), 0x3F)
-            local c3 = bit.band(bit.rshift(n, 6), 0x3F)
-            local c4 = bit.band(n, 0x3F)
+            local n = (a << 16) + ((b or 0) << 8) + (c or 0)
+            local c1 = ((n >> 18) & 0x3F)
+            local c2 = ((n >> 12) & 0x3F)
+            local c3 = ((n >> 6) & 0x3F)
+            local c4 = (n & 0x3F)
             out[#out + 1] = B64:sub(c1 + 1, c1 + 1)
             out[#out + 1] = B64:sub(c2 + 1, c2 + 1)
             out[#out + 1] = b and B64:sub(c3 + 1, c3 + 1) or "="
@@ -158,18 +125,18 @@ int    select(int, ws_fd_set*, ws_fd_set*, ws_fd_set*, const ws_timeval*);
             out[#out + 1] = string.char(0x80 + len)   -- MASK=1 + 7-bit len
         elseif len < 65536 then
             out[#out + 1] = string.char(0x80 + 126,
-                bit.band(bit.rshift(len, 8), 0xFF), bit.band(len, 0xFF))
+                ((len >> 8) & 0xFF), (len & 0xFF))
         else
             out[#out + 1] = string.char(0x80 + 127, 0, 0, 0, 0,
-                bit.band(bit.rshift(len, 24), 0xFF), bit.band(bit.rshift(len, 16), 0xFF),
-                bit.band(bit.rshift(len, 8), 0xFF), bit.band(len, 0xFF))
+                ((len >> 24) & 0xFF), ((len >> 16) & 0xFF),
+                ((len >> 8) & 0xFF), (len & 0xFF))
         end
         local m = { math.random(0, 255), math.random(0, 255),
                     math.random(0, 255), math.random(0, 255) }
         out[#out + 1] = string.char(m[1], m[2], m[3], m[4])
         local masked = {}
         for i = 1, len do
-            masked[i] = string.char(bit.bxor(payload:byte(i), m[((i - 1) % 4) + 1]))
+            masked[i] = string.char((payload:byte(i) ~ m[((i - 1) % 4) + 1]))
         end
         out[#out + 1] = table.concat(masked)
         return table.concat(out)
@@ -184,14 +151,14 @@ int    select(int, ws_fd_set*, ws_fd_set*, ws_fd_set*, const ws_timeval*);
         while true do
             if n - pos + 1 < 2 then break end
             local b1, b2 = buf:byte(pos), buf:byte(pos + 1)
-            local fin    = bit.band(b1, 0x80) ~= 0
-            local opcode = bit.band(b1, 0x0F)
-            local masked = bit.band(b2, 0x80) ~= 0
-            local len    = bit.band(b2, 0x7F)
+            local fin    = (b1 & 0x80) ~= 0
+            local opcode = (b1 & 0x0F)
+            local masked = (b2 & 0x80) ~= 0
+            local len    = (b2 & 0x7F)
             local hdr    = 2
             if len == 126 then
                 if n - pos + 1 < 4 then break end
-                len = bit.bor(bit.lshift(buf:byte(pos + 2), 8), buf:byte(pos + 3))
+                len = ((buf:byte(pos + 2) << 8) | buf:byte(pos + 3))
                 hdr = 4
             elseif len == 127 then
                 if n - pos + 1 < 10 then break end
@@ -212,7 +179,7 @@ int    select(int, ws_fd_set*, ws_fd_set*, ws_fd_set*, const ws_timeval*);
             if mkey then
                 local t = {}
                 for i = 1, len do
-                    t[i] = string.char(bit.bxor(payload:byte(i), mkey[((i - 1) % 4) + 1]))
+                    t[i] = string.char((payload:byte(i) ~ mkey[((i - 1) % 4) + 1]))
                 end
                 payload = table.concat(t)
             end

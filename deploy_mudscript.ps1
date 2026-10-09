@@ -22,7 +22,7 @@
   ms_guardian_agent.sh, swiftc gamepad/OCR binaries, and chmod.
 
   Guardian note: on this rig Guardian hashes via hs.execute("shasum ..."), which
-  is not reachable from LuaJIT's non-interactive sh, so its legacy _checkAll
+  is not reachable from the host's non-interactive sh, so its legacy _checkAll
   returns "error" and SKIPS — it never blocks. Re-seeding here keeps the manifest
   honest so that if `shasum` ever becomes reachable, the check passes instead of
   blocking on stale drift.

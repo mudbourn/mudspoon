@@ -1,6 +1,6 @@
 {
   "host": "mudspoon",
-  "lua": "LuaJIT 2.1.1720049189",
+  "lua": "Lua 5.4",
   "network": false,
   "os": "windows",
   "schema": 1,
@@ -585,7 +585,7 @@
       "status": "pass"
     },
     {
-      "detail": "file hash differs for abc.txt: native \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad *C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791437744_339334/abc.txt\\\n\" true 0, shell \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791437744_339334/abc.txt\\\n\" true 0",
+      "detail": "file hash differs for abc.txt: native \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad *C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791584987_426173/abc.txt\\\n\" true 0, shell \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791584987_426173/abc.txt\\\n\" true 0",
       "id": "execute.hash-parity",
       "kind": "behavior",
       "module": "execute",
@@ -655,7 +655,7 @@
       "name": "main-frame",
       "observed": {
         "h": 1080,
-        "w": 1920
+        "w": 1872
       },
       "status": "pass"
     },
@@ -749,5 +749,5 @@
       "status": "pass"
     }
   ],
-  "timestamp": "2026-10-08T05:35:45Z"
+  "timestamp": "2026-10-09T22:29:47Z"
 }

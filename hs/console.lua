@@ -1,7 +1,6 @@
 -- hs.console: native Win32 console window with the log and a Lua input line --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host = require("hs.foundation")
 
@@ -113,11 +112,11 @@ end
 
 -- Loads source as an expression first and as a statement block second
 local function compile(source)
-    local chunk = loadstring("return " .. source, "=hs")
+    local chunk = load("return " .. source, "=hs")
 
     if chunk then return chunk end
 
-    return loadstring(source, "=hs")
+    return load(source, "=hs")
 end
 
 -- Runs one input line in the global env and prints the result or the error
@@ -132,7 +131,7 @@ local function evaluate(source)
         return
     end
 
-    local packed = { pcall(chunk) }
+    local packed = table.pack(pcall(chunk))
 
     if not packed[1] then
         print(tostring(packed[2]))
@@ -142,7 +141,7 @@ local function evaluate(source)
 
     local parts = {}
 
-    for i = 2, table.maxn(packed) do parts[#parts + 1] = tostring(packed[i]) end
+    for i = 2, packed.n do parts[#parts + 1] = tostring(packed[i]) end
 
     if #parts > 0 then print(table.concat(parts, "\t")) end
 end
@@ -197,8 +196,6 @@ local function inputProcFn(hwnd, msg, wp, lp)
     return U.CallWindowProcA(state.origInputProc, hwnd, msg, wp, lp)
 end
 
-jit.off(inputProcFn, true)
-
 local inputProc = ffi.cast("WNDPROC", inputProcFn)
 
 -- Sizes the output pane and the input line to the client area
@@ -238,13 +235,11 @@ local function wndProcFn(hwnd, msg, wp, lp)
     return U.DefWindowProcA(hwnd, msg, wp, lp)
 end
 
-jit.off(wndProcFn, true)
-
 local wndProc = ffi.cast("WNDPROC", wndProcFn)
 
 -- Creates a child EDIT control
 local function newEdit(parent, style)
-    local edit = U.CreateWindowExA(0, "EDIT", "", bit.bor(WS_CHILD, WS_VISIBLE, WS_BORDER, style),
+    local edit = U.CreateWindowExA(0, "EDIT", "", (WS_CHILD | WS_VISIBLE | WS_BORDER | style),
         0, 0, 100, 100, parent, nil, hInst, nil)
 
     if edit == nil then error("hs.console: CreateWindowExA failed for EDIT") end
@@ -281,7 +276,7 @@ local function ensureWindow()
     if win == nil then error("hs.console: CreateWindowExA failed") end
 
     state.win = win
-    state.out = newEdit(win, bit.bor(ES_MULTILINE, ES_READONLY, ES_AUTOVSCROLL, WS_VSCROLL))
+    state.out = newEdit(win, (ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL))
     state.input = newEdit(win, ES_AUTOHSCROLL)
 
     U.SendMessageA(state.out, EM_SETLIMITTEXT, MAX_CHARS * 2, 0)

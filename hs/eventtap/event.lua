@@ -19,7 +19,6 @@
 -- END --
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local host     = require("hs.foundation")
 local keycodes = require("hs.keycodes")
@@ -272,7 +271,7 @@ UINT MapVirtualKeyW(UINT, UINT);
             return true
         end
 
-        return bit.band(U.GetAsyncKeyState(vk), 0x8000) ~= 0
+        return (U.GetAsyncKeyState(vk) & 0x8000) ~= 0
     end
 -- END --
 

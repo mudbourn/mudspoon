@@ -39,11 +39,11 @@ ffi.copy(classBuf, CLASS)
 
 -- Loads source as an expression first and as a statement block second
 local function compile(source)
-    local chunk = loadstring("return " .. source, "=hs")
+    local chunk = load("return " .. source, "=hs")
 
     if chunk then return chunk end
 
-    return loadstring(source, "=hs")
+    return load(source, "=hs")
 end
 
 -- Runs Lua source in the global env and returns the printed text, the returned values and an error flag
@@ -71,7 +71,7 @@ local function evaluate(source)
             return
         end
 
-        local packed = { pcall(chunk) }
+        local packed = table.pack(pcall(chunk))
 
         if not packed[1] then
             isError = true
@@ -81,7 +81,7 @@ local function evaluate(source)
 
         local parts = {}
 
-        for i = 2, table.maxn(packed) do
+        for i = 2, packed.n do
             parts[#parts + 1] = tostring(packed[i])
         end
 
@@ -164,8 +164,6 @@ if not anchor then
 
         return U.DefWindowProcA(hwnd, msg, wp, lp)
     end
-
-    jit.off(wndProcFn, true)
 
     anchor.proc = ffi.cast("WNDPROC", wndProcFn)
 end

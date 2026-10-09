@@ -29,9 +29,6 @@ local ffi = require("ffi")
     -- shared typedefs (RECT, HANDLE, HDC ...) exist for our cdef below.
     local host = require("hs.foundation")
 
-    -- Reuse foundation's single loaded user32 (host.C.user32). Falls back to a fresh
-    -- load only if that seam ever moves; loading a lib twice is harmless in LuaJIT
-    -- (the C declarations are process-global regardless).
     local U = (host.C and host.C.user32) or ffi.load("user32")
 
     -- DPI: GetMonitorInfoA returns PHYSICAL pixels once the process is DPI-aware. We
@@ -145,11 +142,6 @@ int  GetSystemMetrics(int);
     -- Collected fresh on each allScreens() call. The callback pushes into this table.
     local collected = {}
 
-    -- MONITORENUMPROC. Kept at module scope so the GC never frees the C callback
-    -- while EnumDisplayMonitors still holds it (the standard LuaJIT FFI footgun).
-    -- jit.off + pcall: never let a Lua error unwind through EnumDisplayMonitors (FFI
-    -- boundary) -- a throw, or an unwind out of JIT-compiled mcode, is a hard crash
-    -- ("bad callback"). Skip the bad monitor, keep enumerating.
     local function enumProcFn(hMonitor, _hdc, _lprc, _lparam)
         pcall(function()
             local mi = ffi.new("MONITORINFOEXA")
@@ -171,7 +163,6 @@ int  GetSystemMetrics(int);
 
         return 1  -- TRUE: keep enumerating
     end
-    jit.off(enumProcFn, true)
     local enumProc = ffi.cast("MONITORENUMPROC", enumProcFn)
 
     -- Fallback single screen from GetSystemMetrics, mirroring the spike's assumption. --
@@ -227,10 +218,6 @@ int  GetSystemMetrics(int);
 
             return finish(raws)
         end
-        -- EnumDisplayMonitors synchronously invokes enumProc; keep this caller
-        -- interpreted so the callback is never entered from JIT mcode ("bad callback",
-        -- see hs.foundation host.run).
-        jit.off(screen.allScreens)
     -- END --
 
     -- hs.screen.primaryScreen() -> the primary display. --

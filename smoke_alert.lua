@@ -6,7 +6,7 @@
     --
     -- Physical console (a layered top-most window needs the interactive desktop).
     --
-    --   luajit smoke_alert.lua
+    --   runtime/lua.exe -E smoke_alert.lua
     --
     -- Expected: a rounded dark pill with centred text appears near the bottom-right
     -- of the primary screen, fades smoothly to invisible over ~1s, then the process
@@ -20,7 +20,7 @@
 -- Resolve requires from this script's own directory. --
     local here = (arg[0] or "smoke_alert.lua"):gsub("[^/\\]*$", "")
     if here == "" then here = "./" end
-    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. package.path
+    package.path = here .. "?.lua;" .. here .. "?/init.lua;" .. here .. "compat/?.lua;" .. package.path
 -- END --
 
 local hs     = require("hs")

@@ -1,24 +1,6 @@
--- mudspoon foundation --
-    -- The single shared substrate every hs.* module hangs off:
-    --   * one Win32 message pump married to one Lua timer scheduler, on one thread
-    --   * one low-level keyboard hook and one low-level mouse hook, fanned out
-    --     to subscribers (host dispatch contract)
-    --   * the shared event object shape (event contract), constructed here so
-    --     the read side (hs.eventtap read) and the post side (hs.eventtap.event)
-    --     cannot diverge
-    --   * a monotonic clock and the timer-scheduler core hs.timer wraps
-    --
-    -- No other module installs a hook or runs a message loop. They register with
-    -- host.onKey / host.onMouse / host.schedule and return a table; hs/init.lua
-    -- wires the tables together.
-    --
-    -- This module owns every shared Win32 typedef. Other modules ffi.cdef only
-    -- the *functions* they call (LuaJIT errors on a duplicate typedef, so base
-    -- types must be declared exactly once, here).
--- END --
+-- The one shared substrate: message pump, timer scheduler, hooks, event object and clock
 
 local ffi = require("ffi")
-local bit = require("bit")
 
 local U = ffi.load("user32")
 local K = ffi.load("kernel32")
@@ -168,7 +150,6 @@ BOOL    KillTimer(HWND, ULONG_PTR);
 
 local host = {
     ffi              = ffi,
-    bit              = bit,
     C                = { user32 = U, kernel32 = K, gdi32 = G },
     moduleHandle     = K.GetModuleHandleA(nil),
     pid              = tonumber(K.GetCurrentProcessId()),
@@ -242,9 +223,19 @@ local host = {
     host.eventMeta  = eventMeta
 -- END --
 
+-- Signed high word of a 32-bit value --
+    local function highWord(value)
+        local word = (value & 0xFFFFFFFF) >> 16
+
+        if word >= 0x8000 then return word - 0x10000 end
+
+        return word
+    end
+-- END --
+
 -- Modifier Snapshot --
     local function down(vk)
-        return bit.band(U.GetAsyncKeyState(vk), HIGH_BIT) ~= 0
+        return (U.GetAsyncKeyState(vk) & HIGH_BIT) ~= 0
     end
 
     -- Set-table of currently held modifiers. Only truthy keys are present.
@@ -457,7 +448,7 @@ local host = {
 
             local kb = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
             local vk = tonumber(kb.vkCode)
-            local injected = bit.band(kb.flags, LLKHF_INJECTED) ~= 0
+            local injected = (kb.flags & LLKHF_INJECTED) ~= 0
 
             if t == "keyDown" then
                 local set = injected and injHeld or keyHeld
@@ -477,8 +468,8 @@ local host = {
             local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
 
             if wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP then
-                local hiword = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
-                btnHeld[2 + bit.band(hiword, 0xFFFF)] = (wp == WM_XBUTTONDOWN)
+                local hiword = highWord(tonumber(ms.mouseData))
+                btnHeld[2 + (hiword & 0xFFFF)] = (wp == WM_XBUTTONDOWN)
                 return
             end
 
@@ -564,7 +555,7 @@ local host = {
 
     local function installKeyHook()
         if not keyProc then
-        -- Key hook body, run under pcall with the JIT off
+        -- Key hook body, run under pcall
         local function keyBody(nCode, wParam, lParam)
             local swallow = false
             if nCode >= 0 then
@@ -583,7 +574,7 @@ local host = {
                         return false
                     end
 
-                    local injected = bit.band(kb.flags, LLKHF_INJECTED) ~= 0
+                    local injected = (kb.flags & LLKHF_INJECTED) ~= 0
                     local autorepeat = false
                     if t == "keyDown" then
                         local set = injected and injHeld or keyHeld
@@ -615,7 +606,6 @@ local host = {
             end
             return swallow
         end
-        jit.off(keyBody, true)
         keyProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
             if syncWait > 0 then
                 pcall(trackKey, nCode, wParam, lParam)
@@ -636,7 +626,7 @@ local host = {
 
     local function installMouseHook()
         if not mouseProc then
-        -- Mouse hook body, run under pcall with the JIT off
+        -- Mouse hook body, run under pcall
         local function mouseBody(nCode, wParam, lParam)
             local swallow = false
             if nCode >= 0 then
@@ -650,12 +640,12 @@ local host = {
 
                 -- WM_MOUSEWHEEL packs the signed delta in the high word of mouseData;
                 -- WM_XBUTTON* packs the thumb-button id (XBUTTON1=1, XBUTTON2=2) there.
-                local hiword = bit.arshift(bit.band(tonumber(ms.mouseData), 0xFFFFFFFF), 16)
+                local hiword = highWord(tonumber(ms.mouseData))
                 -- Track button state before typing the event so a move that arrives
                 -- in the same held-button window is seen as a drag.
                 local evType, evButton
                 if wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP then
-                    evButton = 2 + bit.band(hiword, 0xFFFF)
+                    evButton = 2 + (hiword & 0xFFFF)
                     evType   = (wp == WM_XBUTTONDOWN) and "otherMouseDown" or "otherMouseUp"
                     btnHeld[evButton] = (wp == WM_XBUTTONDOWN)
                 else
@@ -681,7 +671,7 @@ local host = {
                             y            = tonumber(ms.pt.y),
                             buttonNumber = evButton,
                             mouseData    = wheel,
-                            injected     = bit.band(ms.flags, LLMHF_INJECTED) ~= 0,
+                            injected     = (ms.flags & LLMHF_INJECTED) ~= 0,
                             extra        = extra,
                         },
                     }
@@ -690,7 +680,6 @@ local host = {
             end
             return swallow
         end
-        jit.off(mouseBody, true)
         mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
             if syncWait > 0 then
                 pcall(trackMouse, nCode, wParam, lParam)
@@ -779,15 +768,12 @@ local host = {
 
     -- WinEvent source, fn(event, hwnd, idObject, idChild)
     local winSubs  = {}
-    local winProc                   -- WINEVENTPROC; created ONCE, kept for the process
-                                    -- lifetime (a late in-flight call after UnhookWinEvent
-                                    -- must land on a live callback, not freed memory).
-    local winHooks = {}             -- HWINEVENTHOOK handles while installed
+    local winProc
+    local winHooks = {}
 
     local function installWinHook()
         if not winProc then
-            -- Body is a plain Lua function so it can be jit.off'd and pcall-driven: no
-            -- error may unwind out of the ffi.cast callback across the OS boundary.
+            -- Runs every winevent subscriber under pcall
             local function winBody(_hook, event, hwnd, idObject, idChild)
                 event    = tonumber(event)
                 idObject = tonumber(idObject)
@@ -799,7 +785,6 @@ local host = {
                     end
                 end
             end
-            jit.off(winBody, true)
             winProc = ffi.cast("WINEVENTPROC", function(hook, event, hwnd, idObj, idChild, thread, time)
                 local ok, err = pcall(winBody, hook, event, hwnd, idObj, idChild)
                 if not ok then io.stderr:write("hammerspoon winevent hook error: " .. tostring(err) .. "\n") end
@@ -812,22 +797,29 @@ local host = {
             -- launch/terminate/show/hide; LOCATIONCHANGE drives move/resize.
             -- hmodWinEventProc MUST be NULL for WINEVENT_OUTOFCONTEXT (the callback is
             -- in our own process, not an injected DLL). idProcess/idThread 0 = all.
-            local flags = bit.bor(WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS)
-            winHooks = {
-                U.SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nil, winProc, 0, 0, WINEVENT_OUTOFCONTEXT),
-                U.SetWinEventHook(EVENT_OBJECT_CREATE,     EVENT_OBJECT_HIDE,       nil, winProc, 0, 0, flags),
-                U.SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nil, winProc, 0, 0, flags),
+            local flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+            local ranges = {
+                { EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT },
+                { EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE, flags },
+                { EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, flags },
             }
-            local any = false
-            for _, h in ipairs(winHooks) do if h ~= nil then any = true end end
-            if not any then error("SetWinEventHook failed (all ranges)") end
+
+            winHooks = {}
+
+            for _, range in ipairs(ranges) do
+                local hook = U.SetWinEventHook(range[1], range[2], nil, winProc, 0, 0, range[3])
+
+                if hook ~= nil then winHooks[#winHooks + 1] = hook end
+            end
+
+            if #winHooks == 0 then error("SetWinEventHook failed (all ranges)") end
         end
     end
 
-    -- Remove the hooks but KEEP winProc alive (see installKeyHook rationale).
+    -- Removes the hooks and keeps winProc alive
     local function uninstallWinHook()
-        for i = 1, #winHooks do
-            if winHooks[i] ~= nil then U.UnhookWinEvent(winHooks[i]) end
+        for _, hook in ipairs(winHooks) do
+            U.UnhookWinEvent(hook)
         end
         winHooks = {}
     end
@@ -888,7 +880,6 @@ local host = {
         runTimers()
         beat()
     end
-    jit.off(modalBody, true)
 
     local modalProc = ffi.cast("TIMERPROC", function()
         local ok, err = pcall(modalBody)
@@ -901,7 +892,7 @@ local host = {
 
         local id = (modalDepth == 1) and U.SetTimer(nil, 0, MODAL_TICK_MS, modalProc) or 0
 
-        local res = { pcall(fn, ...) }
+        local res = table.pack(pcall(fn, ...))
 
         if id ~= 0 then U.KillTimer(nil, id) end
 
@@ -909,17 +900,8 @@ local host = {
 
         if not res[1] then error(res[2], 2) end
 
-        return unpack(res, 2, table.maxn(res))
+        return table.unpack(res, 2, res.n)
     end
-    jit.off(host.modal)
-    -- Keep the pump loop INTERPRETED. PeekMessageA/DispatchMessageA/MsgWaitForMultiple-
-    -- Objects here synchronously invoke our FFI callbacks (wndProcs, and the LL keyboard/
-    -- mouse hooks). LuaJIT cannot enter a callback from JIT-compiled mcode -- doing so
-    -- raises "PANIC: unprotected error in call to Lua API (bad callback)". Compiling this
-    -- hot loop is exactly what made the panic intermittent (it fired once the loop got
-    -- hot, ~1s into boot). jit.off on the callbacks alone does NOT help; the offending
-    -- trace is the CALLER that makes the C call. Non-recursive: callees still JIT freely.
-    jit.off(host.run)
 
     -- Safe to call from a timer or an event handler (same thread). The current
     -- loop iteration finishes, then run() returns.

@@ -1,16 +1,6 @@
--- hs.sound helper child -- one process per sound, so the OS mixes concurrent plays.
---
---   luajit soundhelper.lua <volume 0..100> <path>
---
--- Plays SYNCHRONOUSLY (this process blocks until the sound finishes) so the parent's
--- hs.task doneFn fires exactly at end-of-play, and a parent :stop() (TerminateProcess)
--- cuts it mid-play. PlaySound is single-stream PER PROCESS -- but because each sound is
--- its OWN process, two concurrent children mix at the OS level, which is the whole point
--- of this backend (in-process PlaySound could not overlap). WAV goes through PlaySound
--- (fast); any other format falls back to MCI, still synchronous, still off the host's
--- input-hook thread because it runs here, not there.
---
--- Exit codes: 0 played to completion (or was terminated), 1 could not play, 2 bad args.
+-- Plays one sound file in its own process: lua.exe -E soundhelper.lua <volume 0..100> <path>
+
+package.path = ((arg[0] or ""):gsub("[^/\\]*$", "")) .. "../compat/?.lua;" .. package.path
 
 local ffi = require("ffi")
 local ok, WM = pcall(ffi.load, "winmm")

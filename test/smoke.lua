@@ -1,7 +1,7 @@
 -- =============================================================================
 -- smoke.lua -- cross-platform hs.* parity + functionality smoke suite
 -- =============================================================================
--- Runs UNCHANGED under real Hammerspoon (macOS) and mudspoon (Windows/LuaJIT).
+-- Runs UNCHANGED under real Hammerspoon (macOS) and mudspoon (Windows).
 -- It assumes a global `hs` is already assembled (true inside Hammerspoon; true
 -- after run_mudscript.lua wires the port), exercises the hs.* surface mudscript
 -- actually depends on, and writes a structured JSON report that can be diffed
@@ -9,7 +9,7 @@
 --
 -- How to run:
 --   Windows/mudspoon:  set MUDSPOON_SMOKE=<abs path to this file>, then launch
---                      `luajit run_mudscript.lua`  (see test/smoke_win.ps1).
+--                      `lua.exe run_mudscript.lua`  (see test/smoke_win.ps1).
 --   macOS/Hammerspoon: `hs -c "dofile('<abs path>')"` (see test/smoke_mac.sh),
 --                      requires Hammerspoon's command-line tool / ipc.
 --
@@ -17,8 +17,7 @@
 --          <hs.configdir>/smoke_report_<host>.json, plus a console summary.
 --          Diff two reports with test/diff_smoke.lua.
 --
--- Contract:  Lua 5.1 (LuaJIT) AND 5.4 compatible -- no goto, no `//`, no bitops,
---            no `math.type`; `table.unpack or unpack`. Every check is pcall-wrapped
+-- Contract:  Lua 5.4. Every check is pcall-wrapped
 --            so a missing symbol is RECORDED, never fatal: the suite's whole job is
 --            to discover gaps, not assume them.
 -- =============================================================================
@@ -27,7 +26,7 @@ local hs = _G.hs
 assert(hs, "smoke.lua: global `hs` not found -- run inside Hammerspoon, or via the "
         .. "run_mudscript.lua MUDSPOON_SMOKE hook on Windows.")
 
-local unpack      = table.unpack or unpack
+local unpack      = table.unpack
 local IS_WINDOWS  = package.config:sub(1, 1) == "\\"
 
 -- mudspoon exposes a user-callable hs.run() (the foundation pump) and is the only
@@ -494,16 +493,7 @@ test("window", "frame-shape", "behavior", function()
     return true
 end)
 
--- numfmt: label/key paths built from integer DIVISION results. The config runs
--- on two number models -- LuaJIT (all doubles) on Windows, Lua 5.4 (distinct
--- int/float) on Hammerspoon -- and under 5.4 `/` ALWAYS yields a float, so a
--- naive tostring(1920/2) is "960" on one host and "960.0" on the other. These
--- cases launder a division through the SAFE idiom -- string.format("%d",
--- math.floor(n)) -- exactly as real labels and settings keys should. They must
--- be byte-identical on both hosts; if a change ever lets the float model leak
--- into a stringified number, diff_smoke's VALUE SKEW bucket surfaces it here
--- instead of it going unnoticed in a live UI label. (The ui-lint numfmt-float
--- tripwire guards the static side; this is the empirical, cross-host side.)
+-- numfmt: labels and keys built from integer division results
 test("numfmt", "dim-label", "behavior", function()
     -- a menu/label built from a halved screen dimension
     local w, h = 2560, 1440
@@ -704,7 +694,6 @@ local function summarize()
 end
 
 local function luaVersion()
-    if type(jit) == "table" and jit.version then return jit.version end
     return _VERSION
 end
 

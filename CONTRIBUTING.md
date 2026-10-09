@@ -18,7 +18,7 @@ before touching a module.
   shape (see contract 1).
 - **The clock and scheduler core.** `host.now()` (monotonic ms via QPC) and
   `host.schedule(delayMs, fn, intervalMs?)` — what `hs.timer` wraps.
-- **All shared Win32 typedefs.** LuaJIT errors on a duplicate `typedef`, so base
+- **All shared Win32 typedefs.** A duplicate `typedef` is an error, so base
   types are declared exactly once, in foundation. Your module `ffi.cdef`s only
   the **functions** it calls (and any function-pointer typedef unique to it).
 
@@ -98,7 +98,7 @@ A module that must block the thread on an external process calls
   `CallNextHookEx`. Timers do not fire.
 - The waiting code must keep servicing sent messages, for example
   `MsgWaitForMultipleObjects` with `QS_SENDMESSAGE` followed by `PeekMessage`
-  with `PM_NOREMOVE | PM_QS_SENDMESSAGE`, in a `jit.off` function. Without that
+  with `PM_NOREMOVE | PM_QS_SENDMESSAGE`. Without that
   the low level hooks time out and system input freezes.
 - `hs.execute` is the only caller today.
 

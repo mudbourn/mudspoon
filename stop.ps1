@@ -16,7 +16,7 @@
 
     $stopped = @()
 
-    Get-CimInstance Win32_Process -Filter "Name='luajit.exe'" |
+    Get-CimInstance Win32_Process -Filter "Name='lua.exe'" |
         Where-Object { Matches-Root $_ "run_mudscript" } |
         ForEach-Object {
             Write-Host "[hammerspoon] stopping pid $($_.ProcessId)"

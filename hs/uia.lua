@@ -1,42 +1,4 @@
--- hs.uia  (shared UI Automation substrate; internal, not part of the hs.* API) --
-    -- The single Windows UI-Automation (COM) bootstrap that BOTH hs.axuielement and
-    -- hs.uielement hang off. It exists so the two public modules do not each spin up
-    -- their own IUIAutomation instance or duplicate the (fiddly) COM vtable cdefs --
-    -- exactly mirroring how every leaf module shares one hs.foundation substrate.
-    --
-    -- WHAT IT OWNS:
-    --   * COM apartment init (CoInitializeEx) on the one foundation thread.
-    --   * The process-wide CUIAutomation instance (uia.automation).
-    --   * The COM interface vtable cdefs for IUIAutomation and IUIAutomationElement.
-    --     These are UNIQUE to this module -- no other file declares a COM vtable, so
-    --     there is no duplicate-typedef hazard with foundation. Base Win32 types
-    --     (POINT, RECT, HWND, BOOL, DWORD ...) come from foundation and are NOT
-    --     re-typedef'd here (LuaJIT errors on a duplicate typedef).
-    --   * The element wrapper object shared by both public modules, including the
-    --     poll-based :newWatcher (see WATCHER below) that rides the foundation timer
-    --     scheduler rather than any private thread or message pump.
-    --
-    -- THREADING: UIA is called only from the foundation runloop thread. We initialise
-    -- a single-threaded apartment (COINIT_APARTMENTTHREADED) there; the foundation
-    -- message pump is exactly the pump an STA wants, so no extra pump is introduced.
-    --
-    -- CDEF OWNERSHIP: this module cdefs GUID, the two COM vtable/interface structs,
-    -- CoInitializeEx/CoCreateInstance (ole32), SysStringLen/SysFreeString (oleaut32),
-    -- and WideCharToMultiByte (kernel32). Nothing else declares these.
-    --
-    -- COM VTABLE LAYOUT NOTE: a COM object is a pointer to a struct whose first (and
-    -- here only) member is lpVtbl, a pointer to a struct of __stdcall function
-    -- pointers in a FROZEN order defined by the interface. We only need a handful of
-    -- methods, but every slot BEFORE one we call must still occupy its exact position,
-    -- so unused earlier slots are declared as plain void* placeholders (a pointer slot
-    -- is 8 bytes whether we type it as a function pointer or not). The slot indices in
-    -- the comments are the canonical uiautomationclient.h vtable indices -- do not
-    -- reorder or the wrong function gets called.
-    --
-    -- GRACEFUL DEGRADATION: if ole32/oleaut32 are missing or CUIAutomation cannot be
-    -- created, uia.available is false and every entry point returns nil rather than
-    -- throwing, so a host without UIA still boots.
--- END --
+-- Shared UI Automation bootstrap for hs.axuielement and hs.uielement
 
 local ffi = require("ffi")
 
