@@ -86,6 +86,36 @@
     end)
 -- END --
 
+-- Route crash dialogs to the event log instead of popups --
+    pcall(function()
+        local ffi = require("ffi")
+
+        pcall(ffi.cdef, [[
+            unsigned int SetErrorMode(unsigned int);
+            long WerSetFlags(unsigned long);
+            long WerAddExcludedApplication(const uint16_t*, int);
+        ]])
+
+        local SEM_FAILCRITICALERRORS = 0x0001
+
+        local SEM_NOGPFAULTERRORBOX = 0x0002
+
+        local WER_FAULT_REPORTING_NO_UI = 0x0020
+
+        ffi.C.SetErrorMode(SEM_FAILCRITICALERRORS + SEM_NOGPFAULTERRORBOX)
+
+        ffi.C.WerSetFlags(WER_FAULT_REPORTING_NO_UI)
+
+        local name = "ctfmon.exe"
+
+        local wide = ffi.new("uint16_t[?]", #name + 1)
+
+        for i = 1, #name do wide[i - 1] = name:byte(i) end
+
+        ffi.load("wer").WerAddExcludedApplication(wide, 0)
+    end)
+-- END --
+
 -- Make os.getenv("HOME") resolve (Windows has USERPROFILE, not HOME) --
     -- Shimmed rather than set via _putenv: LuaJIT's os.getenv reads the CRT env, and
     -- which CRT wins is fragile on Windows. A wrapper is portable and total: mac/ sees
