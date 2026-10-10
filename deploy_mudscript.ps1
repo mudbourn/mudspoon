@@ -212,6 +212,49 @@ if (Test-Path $layerExe) {
     Write-Host "deploy: no native\ms_layer\target\release\ms_layer.exe yet (cargo build --release in native\ms_layer); skipping."
 }
 
+# 6d. Spy daemon: build when stale, then install
+$spyDir = Join-Path $Repo 'native\ms_spy'
+$spyExe = Join-Path $spyDir 'target\release\ms_spy.exe'
+$spyDest = Join-Path $localBin 'ms_spy.exe'
+Remove-Item "$spyDest.old" -Force -ErrorAction SilentlyContinue
+if ((Test-Path (Join-Path $spyDir 'Cargo.toml')) -and (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    $spyStale = -not (Test-Path $spyExe)
+    if (-not $spyStale) {
+        $exeTime = (Get-Item $spyExe).LastWriteTimeUtc
+        $spyInputs = @(Get-ChildItem (Join-Path $spyDir 'src') -Recurse -File -ErrorAction SilentlyContinue)
+        $spyInputs += Get-Item (Join-Path $spyDir 'Cargo.toml'), (Join-Path $spyDir 'Cargo.lock') -ErrorAction SilentlyContinue
+        $newer = $spyInputs |
+            Where-Object { $_.LastWriteTimeUtc -gt $exeTime } | Select-Object -First 1
+        $spyStale = $null -ne $newer
+    }
+    if ($spyStale) {
+        Write-Host "deploy: building ms_spy (cargo build --release)"
+        & cargo build --release --manifest-path (Join-Path $spyDir 'Cargo.toml')
+        if ($LASTEXITCODE -ne 0) { Write-Warning "deploy: cargo build of ms_spy failed; using any existing binary." }
+    }
+}
+if (Test-Path $spyExe) {
+    New-Item -ItemType Directory -Force -Path $localBin | Out-Null
+    try {
+        if (Test-Path $spyDest) {
+            try {
+                Copy-File $spyExe $spyDest
+            } catch {
+                Move-Item $spyDest "$spyDest.old" -Force
+
+                Copy-File $spyExe $spyDest
+            }
+        } else {
+            Copy-File $spyExe $spyDest
+        }
+        Write-Host "deploy: spy daemon -> $spyDest"
+    } catch {
+        Write-Warning "deploy: could not replace $localBin\ms_spy.exe (daemon running?). Stop ms_spy and redeploy to update it."
+    }
+} else {
+    Write-Host "deploy: no native\ms_spy\target\release\ms_spy.exe yet (cargo build --release in native\ms_spy); skipping."
+}
+
 # 7. Build number (resets when stable version changes) — mirrors deploy.sh.
 $dataDir = Join-Path $HS 'data'
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Force -Path $dataDir | Out-Null }

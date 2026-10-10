@@ -196,6 +196,16 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         return U.IsZoomed(self._hwnd) ~= 0
     end
 
+    -- Returns the window itself, as uielement watcher callbacks expect
+    function Window:asHSWindow()
+        return self
+    end
+
+    -- Alias of isFullScreen with Hammerspoon's second spelling
+    function Window:isFullscreen()
+        return self:isFullScreen()
+    end
+
     -- :application() -> hs.application wrapping the owning PID (or nil).
     -- Lazy-require to avoid a load-time cycle (application requires this module).
     function Window:application()
