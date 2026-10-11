@@ -22,6 +22,14 @@ jobs:
       TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
+      - name: Normalize the tag
+        shell: pwsh
+        run: |
+          $tag = $env:TAG.Trim()
+          if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
+          "TAG=$tag" >> $env:GITHUB_ENV
+
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
