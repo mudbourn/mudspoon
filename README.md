@@ -1,4 +1,4 @@
-# mudspoon
+# mudspoon - Hammerspoon for Windows
 
 A Hammerspoon compatibility layer for Windows. A standalone Lua 5.4 host
 implements the `hs.*` API through FFI calls to `user32`, `kernel32` and `gdi32`,
