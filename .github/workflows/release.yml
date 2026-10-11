@@ -1,8 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -32,11 +32,15 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1
 
-      - name: Publish the release
+      - name: Attach the installer to the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $tag = $env:GITHUB_REF_NAME
           $setup = "installer\Output\Mudspoon-Setup.exe"
           $hash = (Get-FileHash $setup -Algorithm SHA256).Hash
-          gh release create $env:GITHUB_REF_NAME $setup --title $env:GITHUB_REF_NAME --notes "SHA-256 of Mudspoon-Setup.exe: $hash"
+          gh release upload $tag $setup --clobber
+          $notes = gh release view $tag --json body --jq .body
+          $notes = ($notes.TrimEnd() + "`n`nSHA-256 of Mudspoon-Setup.exe: $hash").Trim()
+          gh release edit $tag --notes $notes
