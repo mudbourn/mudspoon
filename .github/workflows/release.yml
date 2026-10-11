@@ -1,8 +1,15 @@
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build, such as v0.1.1
+        required: true
 
 permissions:
   contents: write
@@ -10,15 +17,21 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Check the tag matches VERSION
         shell: pwsh
         run: |
           $version = (Get-Content installer\VERSION -Raw).Trim()
-          if ("v$version" -ne $env:GITHUB_REF_NAME) {
-              throw "Tag $env:GITHUB_REF_NAME does not match installer\VERSION ($version)."
+          if ("v$version" -ne $env:TAG) {
+              throw "Tag $env:TAG does not match installer\VERSION ($version)."
           }
 
       - name: Install Inno Setup
@@ -37,9 +50,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:TAG
           $setup = "installer\Output\Mudspoon-Setup.exe"
           $hash = (Get-FileHash $setup -Algorithm SHA256).Hash
+
+          gh release view $tag *> $null
+
+          if ($LASTEXITCODE -ne 0) {
+              gh release create $tag --title $tag --notes "Mudspoon $tag"
+          }
+
           gh release upload $tag $setup --clobber
           $notes = gh release view $tag --json body --jq .body
           $notes = ($notes.TrimEnd() + "`n`nSHA-256 of Mudspoon-Setup.exe: $hash").Trim()
