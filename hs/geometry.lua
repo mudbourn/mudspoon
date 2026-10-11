@@ -1,14 +1,3 @@
--- hs.geometry --
-    -- Hammerspoon's unified point/size/rect type, as pure Lua (no FFI, no host).
-    -- One object carries .x .y .w .h; whether it "is" a point, size, or rect is just
-    -- which of those are present. Derived fields (.x1 .y1 .x2 .y2 .center .area
-    -- .aspect) are computed on read via __index, and .x .y .w .h are settable via
-    -- __newindex, matching Hammerspoon's live-field behaviour.
-    --
-    -- Leaf module: requires nothing else. mac/ uses hs.geometry.rect(...) to build a
-    -- snapshot region and then reads .x .y .w .h back off it.
--- END --
-
 local geometry = {}
 
 -- Object plumbing --

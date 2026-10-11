@@ -1,11 +1,3 @@
--- hs.execute --
-    -- hs.execute(command [, with_shell]) -> output, status, type, rc
-    -- The module returns the callable directly.
-    -- On Windows the command string is a POSIX command line. It runs under a real
-    -- POSIX sh ($MUDSPOON_SH, default sh on PATH), and the plain file and hash
-    -- commands mudscript emits run in process without spawning anything.
--- END --
-
 local ffi = require("ffi")
 local shims = require("hs.shims")
 
@@ -387,10 +379,6 @@ int BCryptDestroyHash(void*);
 -- END --
 
 -- Native command fast path (Windows only) --
-    -- Runs the plain file and hash commands mudscript emits in process. Only the
-    -- exact command shapes are matched. Anything else returns nil and takes the
-    -- real shell.
-
     -- Splits a command into argv, honouring POSIX single quotes and the '\'' idiom
     local function argvOf(command)
         local toks = {}

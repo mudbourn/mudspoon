@@ -1,53 +1,3 @@
--- hs.canvas  (Win32 per-pixel-alpha backend, general element set) --
-    -- Hammerspoon's hs.canvas is a full vector surface. This is a borderless, layered,
-    -- top-most popup whose pixels come from UpdateLayeredWindow -- a 32bpp premultiplied
-    -- bitmap drawn ANTI-ALIASED with GDI+. Smooth rounded corners, genuinely transparent
-    -- corners (no clip-to-background white), and true per-pixel alpha (fill translucency
-    -- and glyph fades are real, not faked).
-    --
-    -- The load-bearing consumer is ms_alert (a rounded translucent rectangle + centred
-    -- text, rig-verified), but the element set is general -- rectangle/oval/segments/
-    -- text/image -- so plugin UIs can draw arbitrary scenes, not just toasts.
-    --
-    -- Contract mudscript relies on (see mac/lib/ms_alert.lua):
-    --   hs.canvas.windowLevels / .windowBehaviors  -- numeric tables read at load
-    --   hs.canvas.new({x,y,w,h}) -> canvas
-    --     :level(n) :behavior(n) :alpha([a])   -- a in 0..1 (whole-window fade)
-    --     :frame([{x,y,w,h}])                   -- get (copy) / set (moves+resizes)
-    --     :appendElements(el, ...)              -- rectangle | text specs
-    --     :elementAttribute(i, key, value)      -- mutate one element, re-render
-    --     :mouseCallback(fn)  -- fn(canvas, msg, elemId, x, y); msg =
-    --                            "mouseEnter"|"mouseExit"|"mouseDown"
-    --     :show() :delete()   -- delete is idempotent
-    --
-    -- Element specs honoured (all share action="fill"|"stroke"|"strokeAndFill", default
-    -- strokeAndFill, plus fillColor/strokeColor/strokeWidth where they apply):
-    --   rectangle: roundedRectRadii.xRadius; frame OR frame-less (fills the window)
-    --   oval:      inscribed in frame (aliases: circle, ellipse)
-    --   segments:  coordinates {{x,y},...}; closed=true -> fillable polygon (alias: line)
-    --   text:      text, textFont, textSize, textColor, textAlignment
-    --              (left|center|right|natural|justified), frame{x,y,w,h}
-    --   image:     el.image = a file-path string (or a table with .path); frame or full
-    -- Colours are Hammerspoon tables {red,green,blue,alpha} in 0..1.
-    --
-    -- RENDER MODEL: render() (re)builds a top-down 32bpp DIB the size of the window,
-    -- draws the elements into it with GDI+ (premultiplied PARGB, anti-aliased), then
-    -- pushes it with UpdateLayeredWindow. The whole-window fade (:alpha) is the ULW
-    -- BLENDFUNCTION's SourceConstantAlpha -- so a fade step just re-pushes the same DIB
-    -- with a new constant alpha, no re-render. A position-only :frame move likewise
-    -- re-pushes without redrawing; a size change re-renders.
-    --
-    -- THREADING: every entry point touches the window on the calling thread, which must
-    -- be the runloop/pump thread. mudscript drives canvases only from timer callbacks.
-    --
-    -- DPI: all incoming coords + font sizes are LOGICAL (mac-like points); logi() scales
-    -- them to physical device pixels at the window boundary. See [[hs.dpiscale]].
-    --
-    -- CDEF OWNERSHIP: foundation owns shared typedefs; this cdefs ONLY prototypes/structs
-    -- nothing else declares. UTF-8 -> UTF-16 is pure-Lua (no MultiByteToWideChar, which
-    -- webview owns conditionally), so canvas is independent of whether webview loaded.
--- END --
-
 local ffi = require("ffi")
 
 local host     = require("hs.foundation")
@@ -379,9 +329,6 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
         end
     end
 
-    -- rectangle (rounded via roundedRectRadii.xRadius). A frame-less rectangle fills
-    -- the window, inset by half its stroke so the border stays inside the bitmap --
-    -- this is the ms_alert background path, byte-for-byte the prior behaviour.
     local function drawRect(gfx, el, phW, phH, rec)
         local sw = el.strokeColor and math.max(1, logi(el.strokeWidth or 1)) or 0
         local x, y, w, h, radius
@@ -509,7 +456,7 @@ int GdipDrawImageRect(void*, void*, float, float, float, float);
 
 local canvas = {}
 
--- windowLevels / windowBehaviors: numeric tables mudscript indexes + OR-combines --
+-- windowLevels / windowBehaviors: numeric tables --
     canvas.windowLevels = {
         normal = 0, floating = 3, tornOffMenu = 3, modalPanel = 8, utility = 19,
         dock = 20, mainMenu = 24, status = 25, popUpMenu = 101, overlay = 102,

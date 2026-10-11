@@ -6,10 +6,6 @@
 #   pwsh -File test\smoke_win.ps1 -Webview        # bring up real WebView2 + test it
 #   pwsh -File test\smoke_win.ps1 -Out C:\path\report.json
 #
-# Boots run_mudscript.lua with MUDSPOON_SMOKE set, so the suite runs against the
-# exact `hs` mudscript sees, then exits (0 = all pass, 1 = a failure, 2 = harness
-# error). The report JSON path is printed at the end -- feed it to diff_smoke.lua
-# alongside the Mac report.
 # =============================================================================
 param(
     [switch]$Net,
@@ -17,14 +13,11 @@ param(
     [string]$Out
 )
 
-# "Continue", not "Stop": run_mudscript.lua writes a diagnostic os.exit line to
-# stderr on a non-zero suite result, and under "Stop" PowerShell would surface
-# that native stderr as a terminating error. The suite's exit code is the result.
 $ErrorActionPreference = "Continue"
 $here    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo    = Split-Path -Parent $here                      # ...\Main
 $smoke   = Join-Path $here "smoke.lua"
-$runner  = Join-Path $repo "run_mudscript.lua"
+$runner  = Join-Path $repo "main.lua"
 
 if (-not $Out) { $Out = Join-Path $repo "smoke_report_mudspoon.json" }
 

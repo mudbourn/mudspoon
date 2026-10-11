@@ -283,9 +283,6 @@ local uia = { available = false }
     -- :title() -> the element's UIA Name (its accessible title/label).
     function Element:title() return self:_name() end
 
-    -- :attributeValue(attr) -> the value of a Hammerspoon AX attribute, mapped onto the
-    -- nearest UIA property. Supports the handful mudscript actually reads; unknown
-    -- attributes return nil (Hammerspoon's own behaviour for an absent attribute).
     function Element:attributeValue(attr)
         if     attr == "AXRole"                then return self:role()
         elseif attr == "AXTitle"               then return self:_name()

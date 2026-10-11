@@ -26,11 +26,6 @@ local ffi = require("ffi")
 -- END --
 
 -- Bring-up trace (first-light diagnostics; defined early -- ensureLibs uses it) --
-    -- WebView2 has never actually run under this host. Each COM boundary in the async
-    -- bring-up logs a line (tees to hammerspoon.log), so if the rig crashes, the LAST
-    -- line names the exact step that faulted -- pair it with the SEH exception-code
-    -- capture in run_mudscript.lua. Bring-up is solid now, so this is OFF by default;
-    -- set MUDSPOON_WEBVIEW_TRACE=1 to re-enable the per-COM-boundary log.
     local TRACE = os.getenv("MUDSPOON_WEBVIEW_TRACE") == "1"
     local function trace(msg)
         if TRACE then io.stderr:write("[hs.webview] " .. msg .. "\n") end
@@ -77,9 +72,6 @@ local ffi = require("ffi")
         local okd, d = pcall(ffi.load, "dwmapi")
         Dwm = okd and d or nil
 
-        -- COM must be initialized on the thread that pumps WebView2's messages.
-        -- new() is called from mac/ on the runloop thread, so init here (once).
-        -- RPC_E_CHANGED_MODE (already inited with another model) is benign, ignored.
         Ole.CoInitializeEx(nil, 0x2)  -- COINIT_APARTMENTTHREADED
         trace("ensureLibs: WebView2Loader + ole32 loaded, CoInitializeEx(STA) done"
               .. " [" .. _VERSION .. " " .. (ffi.abi("64bit") and "64-bit" or "32-bit")
@@ -504,7 +496,6 @@ int     SetWindowRgn(HWND, HRGN, BOOL);
     -- borderless + nonactivating.
     local function applyStyleMask(hwnd, mask)
         mask = mask or windowMasks.borderless
-        -- Base window style: popup (borderless) is the only shape mudscript uses.
         local style = WS_POPUP
         U.SetWindowLongA(hwnd, GWL_STYLE, ffi.cast("long", style))
 
@@ -625,15 +616,6 @@ webview.usercontent = usercontent
         return self
     end
 
-    -- JS<->Lua bridge shim. The shared mudscript UI posts to Lua with the WKWebView
-    -- API `window.webkit.messageHandlers.<name>.postMessage(s)` (see ui/ms_shell.html
-    -- shellDispatch). WebView2 has no `window.webkit`, so that call THREW and was
-    -- swallowed by the page's try/catch -- the shell's `ready` message never arrived,
-    -- `_shellReady` stayed false, and the window sat at alpha 0 (invisible). WebView2's
-    -- own page->host channel is `window.chrome.webview.postMessage`, which our
-    -- WebMessageReceived handler delivers to the usercontent callback. This shim maps
-    -- the former onto the latter. Guarded: it is a no-op where a real `window.webkit`
-    -- bridge exists (macOS), and where neither channel exists it leaves the page as-is.
     local BRIDGE_SHIM = table.concat({
         "<script>(function(){",
         "if(window.webkit&&window.webkit.messageHandlers)return;",
@@ -861,8 +843,6 @@ webview.usercontent = usercontent
         return self
     end
 
-    -- :level([n]) -- z-order. Getter returns stored level; setter maps to topmost
-    -- (n >= 0) vs normal (n < 0), the only distinction mudscript needs.
     function Webview:level(n)
         if n == nil then return self._level end
         self._level = n
@@ -1220,13 +1200,6 @@ webview.usercontent = usercontent
             error("hs.webview: CreateWindowExA failed")
         end
         trace("new(): host window created (hwnd ok)")
-        -- Start fully TRANSPARENT (alpha 0), not opaque. A layered window hosting a
-        -- WebView2 child can composite ONE opaque frame when the child first paints,
-        -- before a subsequent alpha() lands -- seen as a flash/stutter right before the
-        -- fade-in. Beginning at 0 means there is never an opaque value to flash.
-        -- Consumers set their alpha before showing (mudscript always fades in from 0);
-        -- _alpha keeps the logical 1.0 default until then, and the window is hidden at
-        -- birth, so the physical/logical gap is never visible.
         if GLASS then
             -- Sheet-of-glass client area: the page's transparent pixels show desktop with
             -- per-pixel alpha. No layered alpha, no DWM corner tier -- the page rounds and

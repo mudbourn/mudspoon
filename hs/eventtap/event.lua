@@ -214,9 +214,6 @@ UINT MapVirtualKeyW(UINT, UINT);
         otherMouseDown = MOUSEEVENTF_MIDDLEDOWN, otherMouseUp = MOUSEEVENTF_MIDDLEUP,
     }
 
-    -- Drag types carry a relative delta (mouseEventDeltaX/Y) rather than a button
-    -- transition; they inject a relative MOUSEEVENTF_MOVE. ms.cam drives these for
-    -- camera rotation, so the game reads raw pointer motion.
     local DRAGGED = {
         leftMouseDragged  = true,
         rightMouseDragged = true,
@@ -460,12 +457,6 @@ local event = {}
         }
     end
 
-    -- Real Hammerspoon's event.types.* are integer CGEventType values, and callers
-    -- written against mac (ms_core's "release stuck mouse buttons" startup pass)
-    -- pass those raw integers -- e.g. newMouseEvent(2, pos) for a left-button-up.
-    -- Our event.types are strings (see above), so translate the CGEventType ints
-    -- back to the string type this module dispatches on. Dragged types collapse to
-    -- mouseMoved (SendInput has no drag verb; a move with a button held is a drag).
     local CG_EVENT_TYPE = {
         [1]  = "leftMouseDown",  [2]  = "leftMouseUp",
         [3]  = "rightMouseDown", [4]  = "rightMouseUp",

@@ -38,7 +38,7 @@ CloseApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-WelcomeLabel2=This installs Hammerspoon for Windows %1 with the mudscript config, for bug testing.%n%nIt must run at the physical console of the PC. Remote Desktop (RDP) intercepts input and breaks the keyboard and mouse hooks.%n%nTo report a bug, open the Start menu and choose Send Hammerspoon bug report. It saves a zip of the logs on your Desktop and opens Explorer on it. Send that zip back along with what you were doing.
+WelcomeLabel2=This installs Hammerspoon for Windows %1, for bug testing.%n%nIt must run at the physical console of the PC. Remote Desktop (RDP) intercepts input and breaks the keyboard and mouse hooks.%n%nTo report a bug, open the Start menu and choose Send Hammerspoon bug report. It saves a zip of the logs on your Desktop and opens Explorer on it. Send that zip back along with what you were doing.
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
@@ -46,14 +46,6 @@ Name: "autostart"; Description: "Start Hammerspoon when I sign in"; Flags: unche
 
 [Files]
 Source: "{#StageDir}\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#StageDir}\.hammerspoon\*"; DestDir: "{app}\.hammerspoon"; Excludes: "data\*,\ms_macros.lua"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#StageDir}\.hammerspoon\ms_macros.lua"; DestDir: "{app}\.hammerspoon"; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "{#StageDir}\.hammerspoon\data\*"; DestDir: "{app}\.hammerspoon\data"; Excludes: ".ms_trusted_hash,.ms_build_num,.ms_build_base,registry_index.json"; Flags: onlyifdoesntexist uninsneveruninstall recursesubdirs createallsubdirs skipifsourcedoesntexist
-Source: "{#StageDir}\.hammerspoon\data\.ms_trusted_hash"; DestDir: "{app}\.hammerspoon\data"; Flags: ignoreversion uninsneveruninstall
-Source: "{#StageDir}\.hammerspoon\data\.ms_build_num"; DestDir: "{app}\.hammerspoon\data"; Flags: ignoreversion uninsneveruninstall
-Source: "{#StageDir}\.hammerspoon\data\.ms_build_base"; DestDir: "{app}\.hammerspoon\data"; Flags: ignoreversion uninsneveruninstall
-Source: "{#StageDir}\.hammerspoon\data\registry_index.json"; DestDir: "{app}\.hammerspoon\data"; Flags: ignoreversion uninsneveruninstall
-Source: "{#StageDir}\.local\*"; DestDir: "{app}\.local"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "wv2.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
@@ -96,7 +88,6 @@ end;
 procedure StopRunningApp;
 var
   Script: string;
-  Helpers: string;
   ResultCode: Integer;
 begin
   Script := ExpandConstant('{app}\app\stop.ps1');
@@ -104,13 +95,6 @@ begin
     Exec('powershell.exe',
       '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '" -Root "' + ExpandConstant('{app}\app') + '" -Tray',
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-  Helpers := ExpandConstant('{app}\.local\bin\');
-  Exec('powershell.exe',
-    '-NoProfile -ExecutionPolicy Bypass -Command "$p = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(''' + Helpers + ''', ''OrdinalIgnoreCase'') }; ' +
-    '$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; ' +
-    'if ($p) { Wait-Process -Id $p.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 function InstalledUninstaller: string;
@@ -165,15 +149,5 @@ begin
   begin
     StopRunningApp;
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Mudspoon');
-  end;
-
-  if CurUninstallStep = usPostUninstall then
-  begin
-    if (not UninstallSilent) and
-       (MsgBox('Also delete your Hammerspoon settings, macros and logs?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
-    begin
-      DelTree(ExpandConstant('{app}\.hammerspoon'), True, True, True);
-      DelTree(ExpandConstant('{app}\.local'), True, True, True);
-    end;
   end;
 end;

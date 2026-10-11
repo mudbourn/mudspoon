@@ -106,12 +106,6 @@ DWORD  GetLastError(void);
     -- END --
 
     -- hs.fs.dir(path) -> iterFn, dirObj --
-        -- LFS/Hammerspoon return TWO values: the iterator AND a directory object
-        -- with a :close() method. `for name in hs.fs.dir(path) do ... end` uses the
-        -- iterator (first value); callers that grab `local it, d = hs.fs.dir(p)` then
-        -- call `d:close()` explicitly (mudscript's guardian does). Returning only the
-        -- iterator makes that d nil and d:close() crash -- so both are returned.
-        -- Yields every entry INCLUDING "." and ".."; raises if the path can't open.
         function fs.dir(path)
             local fd   = ffi.new("WIN32_FIND_DATAA")
             local spec = path .. "\\*"

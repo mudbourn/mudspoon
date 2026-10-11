@@ -1,29 +1,3 @@
--- hs.notify  (Win32 tray-balloon backend) --
-    -- Hammerspoon's hs.notify posts a Notification Center banner. On Windows the closest
-    -- flat-API analogue is a system-tray balloon (Shell_NotifyIcon with NIF_INFO), which
-    -- reuses the plumbing built for hs.menubar. (A true toast via the WinRT
-    -- ToastNotification API would need COM + an AppUserModelID; the balloon is the
-    -- no-COM, always-available path.)
-    --
-    -- LIVE SURFACE mudscript uses (ms_core.lua:3879): hs.notify.new{title, subTitle,
-    -- informativeText}:send(). That is the whole contract exercised. Windows balloons
-    -- have only a title + a body, so subTitle is folded into the body.
-    --
-    -- Contract honoured:
-    --   hs.notify.new(opts|nil) -> note   (opts: title, subTitle, informativeText)
-    --     :send()      -- show the balloon (returns self)
-    --     :withdraw()  -- remove the tray icon early (returns self)
-    --     :release()   -- alias of withdraw (hs parity)
-    --
-    -- Each :send() adds a transient tray icon, shows the balloon, and auto-removes the
-    -- icon after LINGER_S (reset if another send arrives first) so nothing lingers.
-    --
-    -- CDEF OWNERSHIP: NOTIFYICONDATAA + Shell_NotifyIconA + DestroyIcon are owned by
-    -- hs.menubar; require it so they exist. This module cdefs ONLY LoadIconA (a default
-    -- tray glyph) and MAKEINTRESOURCE-style icon ids. Window-creation prototypes come
-    -- from hs.alert.window; base types from foundation.
--- END --
-
 local ffi = require("ffi")
 
 local host = require("hs.foundation")
@@ -122,7 +96,7 @@ local notify = {}
         nid.uFlags           = (NIF_MESSAGE | NIF_ICON | NIF_INFO)
         nid.hIcon            = defIcon
         nid.dwInfoFlags      = NIIF_INFO
-        ffi.copy(nid.szInfoTitle, (self._title or "mudscript"):sub(1, 63))
+        ffi.copy(nid.szInfoTitle, (self._title or "Hammerspoon"):sub(1, 63))
 
         -- Windows balloons have title + body only; fold subTitle into the body.
         local body = self._info or ""
@@ -157,7 +131,6 @@ local notify = {}
         }, Note)
     end
 
-    -- hs.notify.show(title, subTitle, info) convenience (hs parity; mudscript uses new).
     function notify.show(title, subTitle, info)
         return notify.new({ title = title, subTitle = subTitle, informativeText = info }):send()
     end

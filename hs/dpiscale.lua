@@ -1,21 +1,3 @@
--- hs.dpiscale  (leaf: the system DPI scale factor) --
-    -- One number: physical pixels per logical pixel (1.0 at 96dpi/100%, 1.25 at 125%,
-    -- 1.5 at 150%, ...). It is the seam that lets the rest of the hs layer speak ONE
-    -- logical coordinate space (mac-like points) while windows are drawn at native
-    -- device pixels: hs.screen divides physical monitor rects by it (so mudscript's
-    -- layout math is unchanged from the old DPI-unaware space), and hs.canvas /
-    -- hs.webview multiply their logical rects + font sizes by it when creating windows.
-    --
-    -- MASTER SWITCH: this returns 1.0 unless the process is DPI-aware. run_mudscript
-    -- sets awareness at boot; a DPI-UNAWARE process always reports 96dpi here, so with
-    -- awareness off every scale() is 1.0 and all the ×scale / ÷scale callers become
-    -- identity -- i.e. exactly the old behaviour. That makes the whole hi-dpi change
-    -- revert with a single toggle (see run_mudscript's MUDSPOON_HIDPI gate).
-    --
-    -- Depends on FOUNDATION for the loaded user32/gdi32 + shared types; cdefs ONLY its
-    -- own unique prototypes (GetDpiForSystem / GetDC / ReleaseDC / GetDeviceCaps).
--- END --
-
 local ffi  = require("ffi")
 local host = require("hs.foundation")
 local U    = host.C.user32

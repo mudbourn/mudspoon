@@ -221,9 +221,6 @@ local websocket = {}
         end
     end
 
-    -- Push raw bytes to the socket. Best-effort: on a non-blocking short write we log
-    -- and drop the tail (mudscript's messages are small and fit one send). RISK: a
-    -- congested socket could truncate a large frame; a proper client would queue.
     local function rawSend(self, bytes)
         if self._sock == INVALID_SOCKET then return end
         local n = WS.send(self._sock, bytes, #bytes, 0)

@@ -1,18 +1,6 @@
 -- =============================================================================
 -- smoke.lua -- cross-platform hs.* parity + functionality smoke suite
 -- =============================================================================
--- Runs UNCHANGED under real Hammerspoon (macOS) and mudspoon (Windows).
--- It assumes a global `hs` is already assembled (true inside Hammerspoon; true
--- after run_mudscript.lua wires the port), exercises the hs.* surface mudscript
--- actually depends on, and writes a structured JSON report that can be diffed
--- Mac-vs-Windows to separate real PARITY GAPS from platform-inherent differences.
---
--- How to run:
---   Windows/mudspoon:  set MUDSPOON_SMOKE=<abs path to this file>, then launch
---                      `lua.exe run_mudscript.lua`  (see test/smoke_win.ps1).
---   macOS/Hammerspoon: `hs -c "dofile('<abs path>')"` (see test/smoke_mac.sh),
---                      requires Hammerspoon's command-line tool / ipc.
---
 -- Output:  a report JSON at $MUDSPOON_SMOKE_OUT, else
 --          <hs.configdir>/smoke_report_<host>.json, plus a console summary.
 --          Diff two reports with test/diff_smoke.lua.
@@ -24,7 +12,7 @@
 
 local hs = _G.hs
 assert(hs, "smoke.lua: global `hs` not found -- run inside Hammerspoon, or via the "
-        .. "run_mudscript.lua MUDSPOON_SMOKE hook on Windows.")
+        .. "main.lua MUDSPOON_SMOKE hook on Windows.")
 
 local unpack      = table.unpack
 local IS_WINDOWS  = package.config:sub(1, 1) == "\\"
@@ -139,14 +127,8 @@ local function tmpBase()
     return (base:gsub("[/\\]+$", ""))
 end
 
--- -----------------------------------------------------------------------------
--- CONTRACT: presence + type of every hs.* symbol mudscript reaches.
 --   {dotted path, expected type, scope}   scope: "both"(default)|"mudspoon"|"hammerspoon"
 --   type "callable" accepts function OR table (module tables that are __call-able).
--- -----------------------------------------------------------------------------
--- This list is grep-derived from mudscript's mac/ tree (every hs.a.b symbol it
--- calls), NOT guessed -- an unused symbol here would show as a false parity gap.
--- Regenerate with: grep -rhoE "hs\.[a-zA-Z]+(\.[a-zA-Z]+){1,2}" mac --include=*.lua | sort -u
 local CONTRACT = {
     -- timers / json / shell / fs
     { "timer.doAfter", "function" }, { "timer.doEvery", "function" },
@@ -674,7 +656,7 @@ end)
 -- http (network-gated): a known raw URL returns HTTP 200 via async curl/NSURL.
 testAsync("http", "asyncGet-200", function(done)
     if not WANT_NET then return done("skip", "network tests off (set MUDSPOON_SMOKE_NET=1)") end
-    local url = "https://raw.githubusercontent.com/mudbourn/mudscript/main/registry/index.json"
+    local url = "https://raw.githubusercontent.com/Hammerspoon/hammerspoon/master/README.md"
     hs.http.asyncGet(url, nil, function(code)
         if code == 200 then done("pass", nil, 200)
         else done("fail", "HTTP " .. tostring(code)) end

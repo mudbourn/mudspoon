@@ -1,34 +1,19 @@
--- Runs mudscript's mac/ config under the hs.* layer
---   runtime/lua.exe -E run_mudscript.lua [MUDSCRIPT_ROOT]
-
--- Locate the trees + the HOME mudscript installs under --
-    -- This file sits at the mudspoon repo root; hs/ is beside it.
-    local here = (arg[0] or "run_mudscript.lua"):gsub("[^/\\]*$", "")
+-- Locate the host files and the config directory --
+    local here = (arg[0] or "main.lua"):gsub("[^/\\]*$", "")
     if here == "" then here = "./" end
 
-    -- mudscript installs into $HOME/.hammerspoon (see mac/install.sh) and addresses
-    -- itself through os.getenv("HOME").."/.hammerspoon/..." all over, NOT hs.configdir.
-    -- So HOME is the anchor. On the rig it is the dir CONTAINING .hammerspoon.
-    -- Default anchor: whichever candidate actually contains a .hammerspoon/init.lua.
-    -- The tree used to live at ../mudscript/.hammerspoon; it now sits at ../.hammerspoon
-    -- (a sibling of this repo). Probe the new layout first, then the legacy one, so a
-    -- bare `lua.exe run_mudscript.lua` works either way. An explicit arg / MUDSCRIPT_HOME
-    -- always wins.
-    local function hasConfig(dir)
-        local fh = io.open(dir .. "/.hammerspoon/init.lua", "r")
-        if fh then fh:close(); return true end
-        return false
-    end
-    local homeDir = arg[1]
-                  or os.getenv("MUDSCRIPT_HOME")
-                  or (hasConfig(here .. "..") and (here .. ".."))
-                  or (here .. "../mudscript")
-    homeDir = homeDir:gsub("[/\\]+$", "")            -- strip trailing slash
+    local profile = os.getenv("USERPROFILE")
 
-    local hsDir = homeDir .. "/.hammerspoon"          -- the actual config/install dir
+    local envConfig = os.getenv("MUDSPOON_CONFIG_DIR")
+
+    if envConfig == "" then envConfig = nil end
+
+    local hsDir = arg[1] or envConfig or ((profile or ".") .. "/.hammerspoon")
+
+    hsDir = hsDir:gsub("[/\\]+$", "")
 -- END --
 
--- Module search path: the repo root, compat/ and the .hammerspoon install --
+-- Module search path: the repo root, compat/ and the config directory --
     package.path = table.concat({
         here  .. "?.lua",
         here  .. "?/init.lua",
@@ -95,11 +80,6 @@
     do
         local realGetenv = os.getenv
 
-        -- hs.execute routes mac/'s POSIX command strings through a real sh on
-        -- Windows (see hs/execute.lua). It reads $MUDSPOON_SH. Locate a shell by
-        -- probing, in order: a bundle beside this file at bin/, then the standard
-        -- git-for-Windows install paths. Only used when MUDSPOON_SH is unset, so an
-        -- explicit value in the real env always wins.
         local shCandidates = {
             { path = here .. "bin/busybox.exe",                  busybox = true },
             { path = here .. "bin/sh.exe" },
@@ -117,26 +97,14 @@
             end
         end
 
-        -- HOME is the anchor the whole mac/ tree addresses itself through
-        -- (os.getenv("HOME").."/.hammerspoon/..."), and homeDir is the dir we ACTUALLY
-        -- booted .hammerspoon from (located by script position, not by HOME). These MUST
-        -- agree. An inherited real HOME (git-for-Windows sets HOME=C:/Users/<user>) would
-        -- otherwise win the fallback and send HOME-relative code -- notably ms_guardian's
-        -- trusted-hash lookup -- to a DIFFERENT, empty .hammerspoon, which reads as an
-        -- uninitialized manifest and BLOCKS boot. So HOME is a forced OVERRIDE here, not
-        -- a fallback; TMPDIR/MUDSPOON_SH stay fallbacks (a real value should win).
-        local override = { HOME = homeDir }
         local fallback = {
+            HOME = realGetenv("USERPROFILE"),
             TMPDIR = realGetenv("TMPDIR") or realGetenv("TEMP") or realGetenv("TMP")
-                     or (homeDir .. "/tmp"),
+                     or ((realGetenv("USERPROFILE") or ".") .. "/tmp"),
             USER = realGetenv("USERNAME"),
-            -- If nothing was found, fall back to bare `sh` (works if it is on PATH).
-            -- When even that is absent, mac/'s file ops / guardian hashing no-op; a
-            -- ONE-TIME warning is emitted below rather than per-call cmd.exe spam.
             MUDSPOON_SH = resolvedSh or "sh",
         }
         os.getenv = function(k)
-            if override[k] ~= nil then return override[k] end
             return realGetenv(k) or fallback[k]
         end
 
@@ -292,13 +260,10 @@ int MoveFileExA(const char*, const char*, unsigned long);
 -- END --
 
 -- DIAGNOSTIC: trap os.exit so a boot-time quit reveals WHO called it --
-    -- mudscript exits via os.exit(0) in ms.shutdown/ms.restart. If the process
-    -- quits right after boot, this prints the call site + stack before exiting, so
-    -- we can see which path (guardian untrusted? a restart?) is firing.
     do
         local realExit = os.exit
         os.exit = function(code, ...)
-            io.stderr:write("[run_mudscript] *** os.exit(" .. tostring(code)
+            io.stderr:write("[hammerspoon] *** os.exit(" .. tostring(code)
                 .. ") called ***\n" .. debug.traceback("", 2) .. "\n")
             io.stderr:flush()
             return realExit(code, ...)
@@ -342,21 +307,12 @@ int MoveFileExA(const char*, const char*, unsigned long);
     end
 -- END --
 
--- Assemble hs and expose it as a global (mac/ uses `hs` unqualified) --
+-- Assemble hs and expose it as a global --
     local hs = require("hs")
     _G.hs = hs
 -- END --
 
--- Wire real modules the frozen init.lua does not assemble itself --
-    -- init.lua (frozen) only wires the A-G packets + eventtap + hotkey. These leaf
-    -- modules exist as files but aren't hung on `hs`, and mac/ reaches them through
-    -- the global (hs.json.encode, ...), so attach them here. require() also works on
-    -- their own files; this only fills the global table.
-    -- WEBVIEW is OPT-IN: set MUDSPOON_WEBVIEW=1 to attempt the real WebView2 COM
-    -- bring-up (instrumented -- see hs/webview.lua's trace()). Left off, webview stays
-    -- a black-hole stub (below) so a COM fault can't take down a boot. The module has
-    -- never run on hardware; when enabled, the trace lines in hammerspoon.log pinpoint the
-    -- last COM step reached before any crash (paired with the SEH exception-code line).
+-- Wire real modules --
     local ENABLE_WEBVIEW = os.getenv("MUDSPOON_WEBVIEW") == "1"
 
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
@@ -368,18 +324,10 @@ int MoveFileExA(const char*, const char*, unsigned long);
         hs[name] = require("hs." .. name)
     end
 
-    -- mac/ does require("hs.eventtap"), but the read side lives at hs/eventtap/tap.lua
-    -- (there is no hs/eventtap.lua). init.lua already assembled the aggregate table
-    -- as hs.eventtap (tap + .event); alias the bare require name to it via preload.
     package.preload["hs.eventtap"] = function() return hs.eventtap end
 -- END --
 
 -- Route os.execute through the POSIX sh too (Windows) --
-    -- mac/ also shells out via os.execute (mkdir -p, chmod, rm -rf, ...) which goes
-    -- STRAIGHT to cmd.exe and errors ("The syntax of the command is incorrect."), so
-    -- those ops silently fail. hs.execute already routes through sh; delegate to it.
-    -- os.execute returns the Lua 5.4 triple (true or nil, "exit", code). A no-command
-    -- call reports shell availability.
     if package.config:sub(1, 1) == "\\" then
         local realOsExecute = os.execute
         os.execute = function(command)
@@ -415,7 +363,7 @@ int MoveFileExA(const char*, const char*, unsigned long);
     end
 -- END --
 
--- Modules mudscript uses that mudspoon has NOT built yet --
+-- Modules not built yet --
     -- Prune a name the moment its real hs/<name>.lua exists (a preload entry would
     -- otherwise shadow the real file). Submodules ("window.filter") get their own
     -- entry because require() resolves them by full name.
@@ -451,23 +399,8 @@ int MoveFileExA(const char*, const char*, unsigned long);
 -- END --
 
 -- Host-provided hs fields Hammerspoon.app normally sets (not modules) --
-    -- configdir is a real STRING (mac/ concatenates paths onto it); the rest are
-    -- lightweight host hooks stubbed until they earn a real implementation.
     hs.configdir = hsDir
 
-    -- reload: drop the config's cached modules, then re-run the entry file so edits
-    -- on disk actually take effect. init.lua only pulls its modules through require(),
-    -- and Lua caches those in package.loaded -- so without clearing the cache a reload
-    -- just re-requires the same in-memory copies and any file edit is ignored (the
-    -- symptom "hs.reload() does not reload mudscript"). We evict every config-side
-    -- module but PRESERVE the engine: the hs.* shims and the standard/FFI libraries.
-    -- Re-requiring an hs.* module would re-run its ffi.cdef and throw on the duplicate
-    -- typedef, and it holds live runtime state (timers, the runloop), so the engine
-    -- stays put while only the mudscript layer is rebuilt.
-    --
-    -- Caveat: this does not tear down state the OLD config created (hotkeys, timers,
-    -- menubars, watchers). mudscript is expected to reclaim those on load; a fuller
-    -- reset would require the engine to track and release them here.
     local ENTRY = hsDir .. "/init.lua"
 
     -- Libraries that must never be evicted (name -> true)
@@ -506,7 +439,7 @@ int MoveFileExA(const char*, const char*, unsigned long);
             if not isProtected(name) then evicted[#evicted + 1] = name end
         end
         for _, name in ipairs(evicted) do package.loaded[name] = nil end
-        io.stdout:write("[run_mudscript] hs.reload: evicted "
+        io.stdout:write("[hammerspoon] hs.reload: evicted "
             .. #evicted .. " config module(s); re-running init.lua\n")
         io.stdout:flush()
 
@@ -554,9 +487,6 @@ int MoveFileExA(const char*, const char*, unsigned long);
 -- END --
 
 -- Windows os.execute: service `kill [-N] <pid>` natively --
-    -- Lua's os.execute goes to cmd.exe on Windows, which has no `kill`, so mac/'s
-    -- single-instance eviction never terminated the duplicate. Match that shape and
-    -- terminate by Windows PID via TerminateProcess. Anything else passes through.
     if package.config:sub(1, 1) == "\\" then
         local ok, ffi = pcall(require, "ffi")
         if ok then
@@ -598,8 +528,8 @@ int MoveFileExA(const char*, const char*, unsigned long);
             runShutdownCallback()
 
             local pid    = (hs.processInfo and hs.processInfo.processID) or 0
-            local mainDir = (arg[0] or "run_mudscript.lua"):gsub("[^/\\]*$", "")
-            local script  = hsDir .. "/data/.ms_relaunch.ps1"
+            local mainDir = (arg[0] or "main.lua"):gsub("[^/\\]*$", "")
+            local script  = hsDir .. "/.hs_relaunch.ps1"
 
             local f = io.open(script, "w")
             if f then
@@ -624,25 +554,20 @@ int MoveFileExA(const char*, const char*, unsigned long);
     end
 -- END --
 
--- Smoke-test hook: run the cross-platform hs.* suite instead of booting mudscript --
-    -- Set MUDSPOON_SMOKE=<abs path to test/smoke.lua> to run the parity/functionality
-    -- suite against the SAME assembled `hs` mudscript sees (all realExtra modules + host
-    -- fields wired above), then exit -- WITHOUT loading mudscript's init.lua/UI. The suite
-    -- drives its own runloop for async tests and os.exit()s with 0 (all pass) or 1 (any
-    -- failure); a load/raise here exits 2. See test/README.md.
+-- Smoke-test hook: run the cross-platform hs.* suite instead of booting the config --
     do
         local smoke = os.getenv("MUDSPOON_SMOKE")
         if smoke and smoke ~= "" then
-            io.stdout:write("[run_mudscript] MUDSPOON_SMOKE set -- running smoke suite: " .. smoke .. "\n")
+            io.stdout:write("[hammerspoon] MUDSPOON_SMOKE set -- running smoke suite: " .. smoke .. "\n")
             io.stdout:flush()
             local schunk, serr = loadfile(smoke)
             if not schunk then
-                io.stderr:write("[run_mudscript] cannot load smoke suite " .. smoke .. ": " .. tostring(serr) .. "\n")
+                io.stderr:write("[hammerspoon] cannot load smoke suite " .. smoke .. ": " .. tostring(serr) .. "\n")
                 os.exit(2)
             end
             local sok, scode = pcall(schunk)
             if not sok then
-                io.stderr:write("[run_mudscript] smoke suite raised: " .. tostring(scode) .. "\n")
+                io.stderr:write("[hammerspoon] smoke suite raised: " .. tostring(scode) .. "\n")
                 os.exit(2)
             end
             os.exit(tonumber(scode) or 0)
@@ -650,12 +575,7 @@ int MoveFileExA(const char*, const char*, unsigned long);
     end
 -- END --
 
--- Windows font install: make bundled/imported theme fonts visible to WebView2 + GDI --
-    -- mac/ drops theme fonts into a font dir and macOS registers them system-wide, so the
-    -- loading screen (WebView2) and alerts (GDI) resolve them by family name. On Windows
-    -- nothing scans that dir. Install every ui/fonts file per-user BEFORE the UI comes up:
-    -- copy into the LocalAppData font store, register in HKCU (persists, seen by DirectWrite
-    -- so WebView2 finds it), load into THIS process for GDI, and broadcast the change.
+-- Windows font install --
     if package.config:sub(1, 1) == "\\" then
         pcall(function()
             local ffi = require("ffi")
@@ -722,43 +642,31 @@ int MoveFileExA(const char*, const char*, unsigned long);
 -- END --
 
 -- Boot: run the entry file, then drive the runloop --
-    io.stdout:write("[run_mudscript] booting mudscript from " .. hsDir .. "\n")
+    local initFile = io.open(ENTRY, "r")
 
-    local chunk, lerr = loadfile(ENTRY)
-    if not chunk then
-        io.stderr:write("[run_mudscript] cannot load " .. ENTRY .. ": " .. tostring(lerr) .. "\n")
-        os.exit(1)
-    end
+    if initFile then
+        initFile:close()
 
-    local ok, rerr = pcall(chunk)
-    if not ok then
-        io.stderr:write("[run_mudscript] init.lua raised: " .. tostring(rerr) .. "\n")
-        os.exit(1)
-    end
+        io.stdout:write("[hammerspoon] booting from " .. hsDir .. "\n")
 
-    io.stdout:write("[run_mudscript] init.lua loaded; entering runloop (Ctrl+C to quit).\n")
-    io.stdout:flush()
-
-    -- Emergency-stop wiring: when foundation.panic fires (Ctrl+Alt+Pause), cancel every
-    -- running macro and stop its timers. foundation already releases held input.
-    do
-        local okh, host = pcall(require, "hs.foundation")
-        if okh and host and host.onPanic then
-            host.onPanic(function()
-                local ms = _G.ms
-                if type(ms) ~= "table" then return end
-                if ms.cancelMacros then pcall(ms.cancelMacros) end
-                if type(ms.running) == "table" then
-                    for _, timer in pairs(ms.running) do
-                        if type(timer) == "table" and timer.stop then
-                            pcall(function() timer:stop() end)
-                        end
-                    end
-                    ms.running = {}
-                end
-            end)
+        local chunk, lerr = loadfile(ENTRY)
+        if not chunk then
+            io.stderr:write("[hammerspoon] cannot load " .. ENTRY .. ": " .. tostring(lerr) .. "\n")
+            os.exit(1)
         end
+
+        local ok, rerr = pcall(chunk)
+        if not ok then
+            io.stderr:write("[hammerspoon] init.lua raised: " .. tostring(rerr) .. "\n")
+            os.exit(1)
+        end
+
+        io.stdout:write("[hammerspoon] init.lua loaded; entering runloop (Ctrl+C to quit).\n")
+    else
+        io.stdout:write("[hammerspoon] no init.lua in " .. hsDir .. "; entering runloop\n")
     end
+
+    io.stdout:flush()
 
     -- Runloop heartbeat (diagnostic): logs once a second so the log shows whether the
     -- loop keeps ticking. If ticks CONTINUE past webview bring-up, the process is alive
@@ -770,15 +678,12 @@ int MoveFileExA(const char*, const char*, unsigned long);
         local n = 0
         hs.timer.doEvery(1.0, function()
             n = n + 1
-            io.stderr:write("[run_mudscript] runloop heartbeat " .. n .. "\n")
+            io.stderr:write("[hammerspoon] runloop heartbeat " .. n .. "\n")
         end)
     end
 
     local t0 = os.clock()
     hs.run()
-    -- If we get here, hs.run() RETURNED (the loop's `running` went false) rather than
-    -- the process being killed by os.exit. The elapsed time says immediate (guard /
-    -- instant stop) vs ran-a-while.
-    io.stdout:write(("[run_mudscript] hs.run() RETURNED after %.3fs -- runloop stopped "
+    io.stdout:write(("[hammerspoon] hs.run() RETURNED after %.3fs -- runloop stopped "
         .. "(something called hs.stop/shutdown). Not an os.exit.\n"):format(os.clock() - t0))
 -- END --

@@ -49,8 +49,6 @@ local sound = {}
         return self
     end
 
-    -- volume in 0..1 (ms.sound passes soundVolume/100). Stored; handed to the child at
-    -- :play() time (a live child's volume is fixed for its short life -- fine for sfx).
     function Sound:volume(v)
         if v == nil then return self._volume end
         self._volume = math.max(0, math.min(1, v))
@@ -81,8 +79,6 @@ local sound = {}
             self._task = t
             self._startedAt = host.now()
         else
-            -- Could not spawn the helper: honour a pending callback so a synchronous
-            -- ms.sound coroutine isn't left yielded forever.
             fireStop(self)
         end
         return self
@@ -103,11 +99,6 @@ local sound = {}
     end
 
     -- :duration() -- length in seconds, or nil when it cannot be read --
-        -- NSSound reports this on macOS. mudscript reads it to hold the exit curtain
-        -- open for the shutdown and restart sounds. Only WAV is parsed here (the
-        -- sounds on that path are WAV): duration is the data chunk size over the fmt
-        -- chunk byte rate. Any non-WAV or malformed header returns nil, matching the
-        -- "unknown" contract the caller already guards for.
         local function readU32LE(s, i)
             local a, b, c, d = s:byte(i, i + 3)
             if not d then return nil end
@@ -212,7 +203,6 @@ local sound = {}
         return make(path)
     end
 
-    -- No Windows system-sound-by-name registry: nil (mudscript's `or` fallback logs).
     function sound.getByName(_name) return nil end
 
     function sound.soundTypes() return { "wav", "mp3", "m4a", "aiff", "aif", "aac", "caf" } end

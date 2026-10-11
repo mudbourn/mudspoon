@@ -1,9 +1,3 @@
--- hs.shims --
-    -- Windows stand-ins for the macOS commands mudscript shells out to.
-    -- open(argv) plays /usr/bin/open and zipCommand(command) rewrites a
-    -- /usr/bin/zip invocation to the bsdtar that ships with Windows.
--- END --
-
 local ffi = require("ffi")
 
 local shims = {}
@@ -399,7 +393,7 @@ int MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned 
 -- END --
 
 -- Admin flag tree --
-    local MAC_ADMIN_BASE = "/Library/Application Support/mudscript"
+    local MAC_ADMIN_BASE = "/Library/Application Support"
 
     local TRUSTED_SIDS = {
         ["S-1-5-18"] = true,
@@ -445,7 +439,7 @@ int MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned 
 
         if rest ~= "" and rest:sub(1, 1) ~= "/" then return nil end
 
-        local root = (os.getenv("ProgramData") or "C:\\ProgramData") .. "\\mudscript"
+        local root = os.getenv("ProgramData") or "C:\\ProgramData"
 
         return root .. rest:gsub("/", "\\")
     end
@@ -676,7 +670,7 @@ int MultiByteToWideChar(unsigned int, unsigned long, const char*, int, unsigned 
 
         if not flag or #steps ~= (touched and 7 or 1) then return nil end
 
-        local name = flag:match("^" .. MAC_ADMIN_BASE:gsub("%p", "%%%0") .. "/devmode/([%w%._%-]+)$")
+        local name = flag:match("^" .. MAC_ADMIN_BASE:gsub("%p", "%%%0") .. "/[%w%._%-]+/devmode/([%w%._%-]+)$")
 
         if not name or name:match("^%.+$") then return nil end
 

@@ -1,15 +1,3 @@
--- hs.urlevent  (leaf) --
-    -- The entire slice mac/ uses:
-    --   hs.urlevent.openURL(url)   -- open a URL in the system default browser
-    -- No scheme registration, no bind/dispatch -- mac/ never registers a handler,
-    -- so we do NOT build one (a stubbed no-op would be more API than is called).
-    --
-    -- openURL is ShellExecuteA(..., "open", url, ...), the Win32 "launch this URL
-    -- with whatever's registered for its scheme" call. It lives in shell32, which
-    -- is not one of Foundation's shared libs, so load it locally and guard the load
-    -- with pcall: a missing shell32 must degrade openURL to a no-op, never crash boot.
--- END --
-
 local host = require("hs.foundation")
 local ffi  = host.ffi
 

@@ -13,8 +13,7 @@ $ErrorActionPreference = "Stop"
 
 # Config #
     $Root     = $PSScriptRoot
-    $HomeDir  = Split-Path $Root -Parent
-    $Config   = Join-Path $HomeDir ".hammerspoon"
+    $Config   = if ($env:MUDSPOON_CONFIG_DIR) { $env:MUDSPOON_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".hammerspoon" }
     $BootLog  = Join-Path $Config "hammerspoon.log"
     $DataDir  = Join-Path $Config "data"
     $Launch   = Join-Path $Root "launch.ps1"
@@ -38,7 +37,7 @@ $ErrorActionPreference = "Stop"
     function Get-HostProcess {
         Get-CimInstance Win32_Process -Filter "Name='lua.exe'" |
             Where-Object {
-                $_.CommandLine -match "run_mudscript" -and
+                $_.CommandLine -match "main\.lua" -and
                 $_.CommandLine.ToLower().Contains($Root.ToLower())
             }
     }

@@ -87,12 +87,12 @@ $ErrorActionPreference = "Stop"
         }
 
         if (-not (Have-Sh)) {
-            Info "no POSIX shell found (mac/ shells out for file ops) -- installing Git for Windows ..."
+            Info "no POSIX shell found -- installing Git for Windows ..."
 
             try { Winget-Install "Git.Git" } catch { Warn "could not install Git: $_" }
 
             if (-not (Have-Sh)) {
-                Warn "still no sh on the standard paths -- some mac/ file ops will no-op."
+                Warn "still no sh on the standard paths -- shell commands will no-op."
 
                 Warn "install Git for Windows, or drop sh.exe/busybox.exe into $Root\bin\."
             }
@@ -100,24 +100,6 @@ $ErrorActionPreference = "Stop"
     }
 
     & $lua -E -v | Out-Null
-# END #
-
-# Legacy Guardian task check #
-    $guardian = Get-ScheduledTask -TaskName "mudscript Guardian" -ErrorAction SilentlyContinue
-
-    $bareBat = $guardian.Actions |
-        Where-Object { $_.Execute -match '\.(bat|cmd)"?$' } |
-        Select-Object -First 1
-
-    if ($bareBat) {
-        $batPath = $bareBat.Execute.Trim('"')
-
-        Warn "the 'mudscript Guardian' task opens a console window every 5 minutes, which steals focus."
-
-        Warn "to run it hidden, paste this into an administrator PowerShell:"
-
-        Warn "  Set-ScheduledTask -TaskName 'mudscript Guardian' -Action (New-ScheduledTaskAction -Execute 'C:\Windows\System32\conhost.exe' -Argument '--headless cmd /c `"$batPath`"')"
-    }
 # END #
 
 # Launch the host #
@@ -129,9 +111,11 @@ $ErrorActionPreference = "Stop"
 
     if (-not $NoWebview -and -not $NoGlass) { $env:MUDSPOON_GLASS = "1" }
 
-    $entry = Join-Path $Root "run_mudscript.lua"
+    $entry = Join-Path $Root "main.lua"
 
-    if (-not (Test-Path $entry)) { throw "run_mudscript.lua not found next to launch.ps1 ($entry)." }
+    if (-not (Test-Path $entry)) { throw "main.lua not found next to launch.ps1 ($entry)." }
+
+    $Config = if ($env:MUDSPOON_CONFIG_DIR) { $env:MUDSPOON_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".hammerspoon" }
 
     if ($Foreground) {
         Info "starting hammerspoon in the foreground (Ctrl+C to stop) ..."
@@ -142,9 +126,11 @@ $ErrorActionPreference = "Stop"
 
         exit $LASTEXITCODE
     } else {
-        $hsData = Join-Path (Resolve-Path (Join-Path $Root "..")).Path ".hammerspoon\data"
+        $hsData = Join-Path $Config "data"
 
-        $hbFile = Join-Path $hsData ".ms_heartbeat"
+        New-Item -ItemType Directory -Force -Path $hsData | Out-Null
+
+        $hbFile = Join-Path $Config ".hs_heartbeat"
 
         $env:MUDSPOON_HEARTBEAT_FILE = $hbFile
 
@@ -176,8 +162,6 @@ $ErrorActionPreference = "Stop"
 
         Info "watchdog armed -- frees input automatically if the host runloop ever stalls."
 
-        $logDir = (Resolve-Path (Join-Path $Root "..")).Path
-
-        Info "boot log: $logDir\.hammerspoon\hammerspoon.log"
+        Info "boot log: $Config\hammerspoon.log"
     }
 # END #

@@ -1,29 +1,8 @@
--- hs.window.filter  (WinEvent-backed window-event subscriptions) --
-    -- A slice of Hammerspoon's hs.window.filter: enough for mac/'s macro window
-    -- move/resize recorder, which does wf = hs.window.filter.new(nil); wf:subscribe(
-    -- hs.window.filter.windowMoved, cb) and reads wf:getWindows().
-    --
-    -- Backed by foundation's WinEvent source (host.onWinEvent). We do NOT implement
-    -- hs.window.filter's rich scoping/predicate DSL (app allow/deny lists, visibility
-    -- rules, region filters) -- new(nil) means "every top-level window" and that is
-    -- the only scope the consumer uses. The event stream and the window-object shape
-    -- (:application():name(), :id(), :frame()) are what mac/ actually touches.
-    --
-    -- Depends on FOUNDATION for the WinEvent source + event constants, and on
-    -- hs.window for the window object + top-level enumeration. hs.window is required
-    -- LAZILY inside methods: window.lua eager-requires this module at its end (so
-    -- hs.window.filter resolves), and a top-level require here would re-enter a
-    -- half-loaded hs.window. By the time these methods run, hs.window is fully loaded.
--- END --
-
 local host = require("hs.foundation")
 local U    = host.C.user32
 
 local filter = {}
 
--- Event constants (strings, matching Hammerspoon's names). windowMoved is the
--- load-bearing one; windowsChanged is a catch-all that fires for ANY tracked change
--- (create/destroy/show/hide/move), which is how mac/ uses it as a coarse "resync".
 filter.windowCreated   = "windowCreated"
 filter.windowDestroyed = "windowDestroyed"
 filter.windowMoved     = "windowMoved"
@@ -41,9 +20,6 @@ end
 local Filter = {}
 Filter.__index = Filter
 
--- hs.window.filter.new([arg]) -> filter. arg is ignored (only the "all windows"
--- scope, spelled new(nil) by mac/, is supported). Returns a filter with no
--- subscriptions until :subscribe is called.
 function filter.new(_arg)
     return setmetatable({
         _subs  = {},   -- list of { events = <set>, cb = <fn> }

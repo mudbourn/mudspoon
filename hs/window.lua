@@ -1,27 +1,3 @@
--- hs.window  (leaf) --
-    -- Top-level window objects, matching Hammerspoon's `hs.window`. First slice:
-    -- the HOT PATH mac/ crashes without -- a real window object whose :frame()
-    -- returns NUMERIC {x,y,w,h}. Two current crash sites depend on that:
-    --   mac/lib/ms_devtools.lua:2031  math.floor(f.x/.y/.w/.h)
-    --   mac/ms_core.lua:1845          f.x + f.w/2
-    --
-    -- Depends on FOUNDATION for shared FFI TYPES only (HWND, RECT, DWORD, BOOL,
-    -- HANDLE, LPCSTR, UINT, LONG ...). Per the frozen cdef-ownership rule this
-    -- module cdefs ONLY its own function prototypes + the one enum callback type,
-    -- and never re-typedefs a shared type.
-    --
-    -- CONTRACT: coordinates are Win32 physical pixels, top-left origin, Y down --
-    -- the same space hs.screen reports (see hs/screen.lua). :frame() returns a
-    -- plain numeric table by default; if a REAL hs.geometry is loaded it wraps the
-    -- result in geometry.rect(...) so callers get the richer type. mac/ only reads
-    -- .x/.y/.w/.h, so the plain table is a sufficient fallback and MUST work when
-    -- geometry is still the boot stub.
-    --
-    -- RIG-ONLY: every Win32 call below can only be verified on the physical
-    -- Windows console. ffi.load("user32") cannot run on macOS -- keep it inside
-    -- functions / behind foundation so `loadfile` parses clean on the mac.
--- END --
-
 local ffi = require("ffi")
 
 -- Foundation: shared types + the single loaded user32. --
@@ -69,12 +45,6 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
 -- END --
 
 -- Real hs.geometry resolver (memoized only once a REAL one is found) --
-    -- During boot hs.geometry is a black-hole stub (see run_mudscript STUB_MODULES):
-    -- it is callable and truthy, and geo.rect(...) returns the stub -- whose .x/.w
-    -- are NOT numeric, which would re-break the very crash sites we exist to fix.
-    -- So probe FUNCTIONALLY: only treat geometry as real if rect(0,0,2,2) yields a
-    -- table with numeric w==2,x==0. Cache only a real hit; keep probing (cheap,
-    -- require() is cached) until one appears (e.g. after geometry lands / a reload).
     local realGeo = nil
     local function geometry()
         if realGeo then return realGeo end
@@ -186,9 +156,6 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         return hasCaption and not isTool
     end
 
-    -- :isMinimized() / :isFullScreen() -- mac/ reads isFullScreen() for debug text.
-    -- isFullScreen approximated as "maximized" (IsZoomed); true borderless-fullscreen
-    -- detection needs a frame-vs-monitor compare, deferred.
     function Window:isMinimized()
         return U.IsIconic(self._hwnd) ~= 0
     end
@@ -223,9 +190,6 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         return pidOf(self._hwnd)
     end
 
-    -- :screen() -> the hs.screen this window is (mostly) on. Chosen by which screen
-    -- frame contains the window centre; falls back to mainScreen(). mac/ calls
-    -- win:screen():frame(), so this must return an object with :frame().
     function Window:screen()
         local ok, scr = pcall(require, "hs.screen")
         if not ok or type(scr) ~= "table" or type(scr.allScreens) ~= "function" then
@@ -325,9 +289,6 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
     end
     window.frontmostWindow = window.focusedWindow
 
-    -- hs.window.allWindows() -> visible top-level windows (best-effort standard set).
-    -- Filters to visible windows with a non-empty title, which drops most tool/shadow
-    -- windows -- close enough to Hammerspoon's "standard windows" for mac/'s needs.
     function window.allWindows()
         local out = {}
         for _, hwnd in ipairs(enumTopLevel()) do
@@ -338,12 +299,8 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         return out
     end
 
-    -- orderedWindows() -> same set (true front-to-back Z order needs GetTopWindow /
-    -- GetWindow(GW_HWNDNEXT) walking; deferred, the set is what mac/ iterates).
     window.orderedWindows = window.allWindows
 
-    -- hs.window.find(pattern) -> first window whose title OR owning app name matches
-    -- the (plain, case-insensitive) substring. mac/ uses it as a target fallback.
     function window.find(pattern)
         if not pattern then return nil end
         local needle = tostring(pattern):lower()

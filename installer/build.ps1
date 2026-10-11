@@ -1,25 +1,16 @@
 # Builds installer\Output\Mudspoon-Setup.exe #
-    # Stages the host, the Lua runtime and a deployed copy of mudscript, generates the icon
-    # and wizard images, then compiles Mudspoon.iss with Inno Setup 6.
     # Usage: powershell -ExecutionPolicy Bypass -File installer\build.ps1
-param(
-    [string]$Mudscript
-)
-
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 
 # Paths #
     $Here    = $PSScriptRoot
     $Repo    = Split-Path $Here -Parent
-    $Share   = Split-Path $Repo -Parent
     $Build   = Join-Path $Here "build"
     $Stage   = Join-Path $Build "stage"
     $Assets  = Join-Path $Here "assets"
     $Png     = Join-Path $Repo "hammerspoon400x400.png"
     $Version = (Get-Content (Join-Path $Here "VERSION") -Raw).Trim()
-
-    if (-not $Mudscript) { $Mudscript = Join-Path $Share "mudscript" }
 # END #
 
 # Find ISCC.exe, installing Inno Setup 6 with winget when absent #
@@ -175,7 +166,7 @@ Add-Type -AssemblyName System.Drawing
     New-Item -ItemType Directory -Force -Path $app | Out-Null
 
     $topFiles = @(
-        "run_mudscript.lua",
+        "main.lua",
         "launch.ps1",
         "stop.ps1",
         "watchdog.ps1",
@@ -209,21 +200,6 @@ Add-Type -AssemblyName System.Drawing
     foreach ($f in @("lua.exe", "lua54.dll", "cffi.dll")) {
         Copy-Item (Join-Path $Repo "runtime\$f") $rt
     }
-# END #
-
-# Stage mudscript with the Windows deploy script #
-    $hs = Join-Path $Stage ".hammerspoon"
-    New-Item -ItemType Directory -Force -Path $hs | Out-Null
-
-    $deploy = Join-Path $Repo "deploy_mudscript.ps1"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $deploy -Repo $Mudscript -HS $hs -NoBackup | Out-Host
-
-    if ($LASTEXITCODE -ne 0) { throw "deploy_mudscript.ps1 failed ($LASTEXITCODE)." }
-
-    $templates = Join-Path $Mudscript "mac\templates"
-    Copy-Item $templates (Join-Path $hs "templates") -Recurse -Force
-
-    Copy-Item (Join-Path $templates "ms_macros.lua") (Join-Path $hs "ms_macros.lua") -Force
 # END #
 
 # Compile #

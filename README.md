@@ -2,8 +2,7 @@
 
 A Hammerspoon compatibility layer for Windows. A standalone Lua 5.4 host
 implements the `hs.*` API through FFI calls to `user32`, `kernel32` and `gdi32`,
-so tools written against Hammerspoon run unmodified on Windows. mudscript is the
-first consumer.
+so tools written against Hammerspoon run unmodified on Windows.
 
 `mudspoon` is only the repo codename. At runtime the host presents itself as
 Hammerspoon: process identity (`hs.processInfo.bundleID`), window classes
@@ -15,9 +14,10 @@ misreports the low-level hooks.
 
 ## Layout
 
-- `run_mudscript.lua`: the host glue that Hammerspoon.app normally provides. It
-  builds `hs`, sets `HOME` to the folder that holds `.hammerspoon`, and runs
-  mudscript's `init.lua` on the foundation runloop.
+- `main.lua`: the host glue that Hammerspoon.app normally provides. It builds
+  `hs`, sets `HOME` from `USERPROFILE` when unset, and runs
+  `%USERPROFILE%\.hammerspoon\init.lua` on the foundation runloop. The first
+  command-line argument or `MUDSPOON_CONFIG_DIR` overrides the config folder.
 - `hs/`: one module per `hs.*` extension. `hs/foundation.lua` owns the Win32
   message pump, the timer scheduler, the low-level keyboard and mouse hooks and
   the clock.
@@ -32,18 +32,15 @@ rules.
 
 ## Installing
 
-`installer\build.ps1` stages the host, the Lua runtime and a deployed copy of mudscript,
-then compiles `installer\Output\Mudspoon-Setup.exe` with Inno Setup 6.
+`installer\build.ps1` stages the host and the Lua runtime, then compiles `installer\Output\Mudspoon-Setup.exe` with Inno Setup 6.
 
 ```
 powershell -ExecutionPolicy Bypass -File installer\build.ps1
 ```
 
-The installer puts everything under `%LOCALAPPDATA%\Mudspoon`:
-
-- `app\`: the host, the Lua runtime and the launch scripts.
-- `.hammerspoon\`: the mudscript config the host boots from. User data in
-  `.hammerspoon\data` survives updates and uninstall.
+The installer puts the app under `%LOCALAPPDATA%\Mudspoon\app`: the host, the
+Lua runtime and the launch scripts. The config lives in `%USERPROFILE%\.hammerspoon`
+and is never touched by install or uninstall.
 
 ## Running
 
@@ -68,9 +65,8 @@ With `-Dev`, `hs.cmd` sends Lua to the running host and prints the result:
 hs.cmd -c "print(hs.configdir)"
 ```
 
-From a checkout, the host boots the sibling `..\.hammerspoon`.
-`deploy_mudscript.ps1` copies the mudscript source into that tree and re-seeds
-the Guardian trusted hash.
+The host boots `%USERPROFILE%\.hammerspoon\init.lua`. The host also writes
+`hammerspoon.log`, `.hs_heartbeat` and `data\` there.
 
 ## Setup from a checkout
 

@@ -83,9 +83,6 @@ BOOL   IsIconic(HWND);
         return self._pid
     end
 
-    -- :name() -> exe basename WITHOUT extension (Hammerspoon reports app display
-    -- names sans ".app"; the Windows analog is the exe name without ".exe"). mac/
-    -- compares this against target names like "RobloxPlayerBeta", so strip the ext.
     function App:name()
         if self._pid == hostPid then return HOST_NAME end
         if self._name == nil then
@@ -369,11 +366,6 @@ BOOL   IsIconic(HWND);
         return newApp(pid)
     end
 
-    -- hs.application.get(hint) -> first running app matching by name (case-insensitive
-    -- exact match on the exe basename sans ext, else substring). hint may also be a
-    -- number, treated as a pid. Enumerates process ids via top-level windows -- so it
-    -- finds apps that OWN a window (which is exactly what mac/ targets). A truly
-    -- windowless process won't be found by this slice.
     function application.get(hint)
         if hint == nil then return nil end
         if hint == hostPid or (type(hint) == "string" and hint:lower() == HOST_NAME:lower()) then
@@ -432,8 +424,6 @@ BOOL   IsIconic(HWND);
         return out
     end
 
-    -- hs.application.find(hint) -> alias of get for this slice (stock returns a list
-    -- for a pattern; mac/ uses the single-result shape).
     application.find = application.get
 
     -- hs.application.frontmostApplication alias some code spells .frontmost...

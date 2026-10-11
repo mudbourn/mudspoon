@@ -1,5 +1,4 @@
 data/*
-!data/ms_settings_default.json
 backups/
 ignore/
 *.WebView2/

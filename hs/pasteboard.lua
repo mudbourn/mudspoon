@@ -1,18 +1,3 @@
--- hs.pasteboard  (leaf, Foundation-backed) --
-    -- The narrow slice mac/ uses:
-    --   hs.pasteboard.setContents(text)            -> bool
-    --   hs.pasteboard.watcher.new(callback):start()/:stop()
-    -- The watcher callback receives the new clipboard text (Hammerspoon parity).
-    --
-    -- Text-only, CF_TEXT (ANSI), matching the tree-wide *A convention. Lua strings
-    -- are handed to/from the clipboard as raw bytes; the known unicode caveat is
-    -- accepted. Clipboard access needs the Win32 clipboard API (user32) plus the
-    -- global-heap allocator SetClipboardData demands the payload live in (kernel32).
-    --
-    -- Foundation-backed only for host.schedule (the watcher polls the clipboard
-    -- sequence number on the one runloop; it installs no hook and spawns no thread).
--- END --
-
 local host = require("hs.foundation")
 local ffi  = host.ffi
 local U     = host.C.user32
@@ -72,7 +57,7 @@ local pasteboard = {}
     end
 -- END --
 
--- getContents (internal; the watcher needs it, mac/ never calls it directly) --
+-- getContents (internal) --
     -- Read CF_TEXT back out as a Lua string, or nil when the clipboard holds no
     -- text / cannot be opened.
     function pasteboard.getContents()
@@ -92,11 +77,6 @@ local pasteboard = {}
 -- END --
 
 -- watcher --
-    -- hs.pasteboard.watcher.new(callback) -> watcher; :start()/:stop().
-    -- Polls GetClipboardSequenceNumber (a cheap monotonically-increasing counter
-    -- the OS bumps on every clipboard change) off the one runloop via host.schedule.
-    -- On a bump it reads the current text and fires callback(text) -- Hammerspoon
-    -- hands the new contents to the callback, and mac/'s clipChanged relies on that.
     local Watcher = {}
     Watcher.__index = Watcher
 

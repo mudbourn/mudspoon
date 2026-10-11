@@ -9,8 +9,8 @@ report on each host and diff them, so a divergence is *measured*, not guessed.
 
 | File | Runs on | What it is |
 |------|---------|------------|
-| `smoke.lua` | both | The suite. Assumes a global `hs`. Contract + behavior + async tests over the exact hs.* surface mudscript uses. Writes a JSON report + console summary. |
-| `smoke_win.ps1` | Windows | Boots `run_mudscript.lua` with `MUDSPOON_SMOKE` set and runs the suite against the real port. |
+| `smoke.lua` | both | The suite. Assumes a global `hs`. Contract + behavior + async tests over the hs.* surface the contract lists. Writes a JSON report + console summary. |
+| `smoke_win.ps1` | Windows | Boots `main.lua` with `MUDSPOON_SMOKE` set and runs the suite against the real port. |
 | `smoke_mac.sh` | macOS | Runs the suite inside a live Hammerspoon via the `hs` command-line tool. |
 | `diff_smoke.lua` | anywhere w/ lua | Compares two reports; prints PARITY GAPS / VALUE SKEW / COVERAGE / INFO. |
 
@@ -46,12 +46,7 @@ buckets are noise you can usually ignore:
 
 ## What it checks
 
-- **Contract** — presence + type of every `hs.a.b` symbol mudscript actually calls.
-  The list in `smoke.lua` is grep-derived from `mudscript/mac`, not guessed; an
-  unused symbol would show up as a false gap. Regenerate the surface with:
-  ```
-  grep -rhoE "hs\.[a-zA-Z]+(\.[a-zA-Z]+){1,2}" mudscript/mac --include=*.lua | sort -u
-  ```
+- **Contract** — presence + type of every `hs.a.b` symbol in the `smoke.lua` contract list.
 - **Behavior** (headless-safe, side effects restored) — json round-trip and
   canonical form, geometry math, `hs.execute` echo, `hs.fs` stat/list, pasteboard
   round-trip (original restored), frontmost app / main screen / focused window
@@ -69,9 +64,7 @@ UI-showing surfaces (alert, menubar, notify, canvas, webview, dialog) are
   `jq -c -S`). This is the exact invariant the Windows registry-signature fix
   relies on, so the suite guards it — it shows as INFO in the diff, not a gap.
 - `distributednotifications.{post,new}` currently **fail on mudspoon** (unimplemented)
-  and pass on Hammerspoon. mudscript guards the feature with
-  `if not hs.distributednotifications then return end` ([ms_core.lua:6632]), so it
-  degrades gracefully — a real but low-priority, non-blocking gap.
+  and pass on Hammerspoon. It is a real but low-priority, non-blocking gap.
 - `hs.focus` is tested **unscoped on purpose**. It is mudspoon-provided with no
   upstream hs extension; the first Mac run settles empirically whether real
   Hammerspoon resolves it (expected: it does not). Read that result rather than
@@ -81,13 +74,13 @@ UI-showing surfaces (alert, menubar, notify, canvas, webview, dialog) are
 
 ## How it hooks in
 
-On Windows, `run_mudscript.lua` checks `MUDSPOON_SMOKE`: if set, it runs that file
+On Windows, `main.lua` checks `MUDSPOON_SMOKE`: if set, it runs that file
 against the fully-assembled `hs` (all `realExtra` modules + host fields wired) and
-exits **without** loading mudscript's `init.lua`/UI. The suite drives its own
+exits **without** loading the config's `init.lua`/UI. The suite drives its own
 foundation runloop for the async tests and exits `0` (all pass) / `1` (any failure);
 a load or runtime error in the suite exits `2`.
 
-On macOS there is no `run_mudscript.lua`; `smoke_mac.sh` injects the suite into the
+On macOS there is no `main.lua`; `smoke_mac.sh` injects the suite into the
 already-running Hammerspoon with `hs -c "dofile(...)"`. Because that evaluates in
 Hammerspoon's own process (shell env invisible), options are passed as globals
 (`MUDSPOON_SMOKE_NET=true`) and the report lands at

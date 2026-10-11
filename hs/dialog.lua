@@ -1,34 +1,3 @@
--- hs.dialog  (Win32 message box + file/folder picker) --
-    -- Hammerspoon's hs.dialog wraps NSAlert / NSOpenPanel. This covers the two pieces
-    -- mudscript uses, with FLAT C APIs only (no COM vtables -- deliberately avoiding the
-    -- webview COM class of risk):
-    --
-    --   hs.dialog.blockAlert(message, informativeText, button1[, button2][, style])
-    --       -> the label string of the button the user clicked.
-    --       Backed by MessageBoxA. LIMITATION: MessageBoxA cannot show custom button
-    --       labels, so a two-button alert renders as OK / Cancel while still RETURNING
-    --       button1 / button2 (the return value -- what callers switch on -- is faithful;
-    --       only the visible glyphs differ). A future faithful upgrade is TaskDialog.
-    --
-    --   hs.dialog.chooseFileOrFolder(title, defaultPath, canChooseFiles, canChooseDirs,
-    --                                allowMultiple[, allowedFileTypes])
-    --       -> an ARRAY of selected path strings, or nil if cancelled.
-    --       Folders (canChooseDirs and not canChooseFiles) use SHBrowseForFolder; files
-    --       use GetOpenFileNameA (OFN_ALLOWMULTISELECT when allowMultiple). Callers read
-    --       it via pairs()+type=="string", so the array shape is what they expect.
-    --
-    -- CDEF OWNERSHIP: base types + HWND come from foundation. This module owns
-    -- MessageBoxA (user32), the OPENFILENAMEA/BROWSEINFOA structs + GetOpenFileNameA
-    -- (comdlg32), SHBrowseForFolderA/SHGetPathFromIDListA/ILFree (shell32), and
-    -- CoInitialize (ole32) -- none declared elsewhere. char* is used in place of LPSTR to
-    -- avoid a duplicate typedef.
-    --
-    -- THREADING: modal -- MessageBoxA / the pickers pump their own message loop and block
-    -- the calling (runloop) thread until dismissed. mudscript calls these off UI actions
-    -- where blocking is intended; note ms_shell wraps chooseFileOrFolder in a "finder
-    -- interlude" that hides the shell first so the native dialog is not occluded.
--- END --
-
 local ffi = require("ffi")
 
 local host = require("hs.foundation")
@@ -160,7 +129,7 @@ local dialog = {}
         end
         local kind = button2 and MB_OKCANCEL or MB_OK
         local flags = (kind | MB_ICONWARNING | MB_SETFOREGROUND)
-        local ret = host.modal(U.MessageBoxA, nil, cstr(text), cstr("mudscript"), flags)
+        local ret = host.modal(U.MessageBoxA, nil, cstr(text), cstr("Hammerspoon"), flags)
         if not button2 then return button1 end
         return (ret == IDOK) and button1 or button2
     end
@@ -236,7 +205,7 @@ local dialog = {}
     end
 -- END --
 
--- Other hs.dialog entry points mudscript does not use -- present as safe fallbacks --
+-- Other hs.dialog entry points, present as safe fallbacks --
     function dialog.textPrompt(_msg, _info, _default, b1, _b2)
         return b1 or "OK", ""   -- no native input box; return the default button, empty text
     end
