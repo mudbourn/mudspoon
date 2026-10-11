@@ -10,3 +10,4 @@ ignore/
 !README.md
 !docs/*.md
 !docs/**/*.md
+*.patch
