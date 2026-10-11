@@ -263,9 +263,29 @@ local host = {
         [0x5C] = "cmd",
     }
 
-    -- Flags for a key event from inside the hook, where async state still lags this transition
-    local function eventFlags(vk, isDown, held)
+    -- Flags for an event from inside the hook, where async state still lags this transition.
+    -- A modifier held only by this process's own injections is left out, as on macOS,
+    -- where the flags of a posted event never latch into the system modifier state.
+    local function eventFlags(vk, isDown, held, ownOnly)
         local f = currentFlags()
+
+        if ownOnly then
+            for name in pairs(f) do
+                local mine, other = false, false
+
+                for mvk, flag in pairs(MODIFIER_FLAG) do
+                    if flag == name then
+                        if ownOnly[mvk] then
+                            mine = true
+                        elseif held[mvk] then
+                            other = true
+                        end
+                    end
+                end
+
+                if mine and not other then f[name] = nil end
+            end
+        end
 
         local flag = MODIFIER_FLAG[vk]
 
@@ -274,7 +294,7 @@ local host = {
         local on = isDown
 
         for other, name in pairs(MODIFIER_FLAG) do
-            if name == flag and held[other] then on = true end
+            if name == flag and held[other] and not (ownOnly and ownOnly[other]) then on = true end
         end
 
         f[flag] = on or nil
@@ -376,6 +396,24 @@ local host = {
     -- Keys held by injected events
     local injHeld = {}
 
+    -- Keys held by injections tagged as this process's own
+    local ownHeld = {}
+
+    -- Keys held only by own injections, or nil when there are none
+    local function ownOnlyView()
+        if next(ownHeld) == nil then return nil end
+
+        local only
+        for vk in pairs(ownHeld) do
+            if not keyHeld[vk] then
+                only = only or {}
+                only[vk] = true
+            end
+        end
+
+        return only
+    end
+
     -- The held view eventFlags reads: hardware keys plus injected keys
     local function heldView()
         if next(injHeld) == nil then return keyHeld end
@@ -418,6 +456,20 @@ local host = {
     -- dwExtraInfo value an external input daemon stamps on its own injections
     local EXTERNAL_SIGNATURE = 999
 
+    -- True for a dwExtraInfo tag that marks input this process or its daemon injected
+    local function isOwnTag(extra)
+        return extra == INJECTED_MAGIC or extra == EXTERNAL_SIGNATURE
+    end
+
+    -- Records a key transition in the own-injection held set
+    local function trackOwn(vk, isDown, injected, extra)
+        if isDown then
+            if injected and isOwnTag(extra) then ownHeld[vk] = true end
+        else
+            ownHeld[vk] = nil
+        end
+    end
+
     -- Sync wait --
         -- Count of synchronous waits in progress. While it is above zero the hook
         -- procs run no subscriber and only keep held state current.
@@ -449,6 +501,8 @@ local host = {
             local kb = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
             local vk = tonumber(kb.vkCode)
             local injected = (kb.flags & LLKHF_INJECTED) ~= 0
+
+            trackOwn(vk, t == "keyDown", injected, tonumber(kb.dwExtraInfo))
 
             if t == "keyDown" then
                 local set = injected and injHeld or keyHeld
@@ -521,6 +575,7 @@ local host = {
         for b = 0, 4 do if btnHeld[b] then heldBtns[#heldBtns + 1] = b end end
         for vk in pairs(keyHeld) do keyHeld[vk] = nil end
         for vk in pairs(injHeld) do injHeld[vk] = nil end
+        for vk in pairs(ownHeld) do ownHeld[vk] = nil end
         for b = 0, 4 do btnHeld[b] = false end
         local snap = {
             keys    = heldKeys,
@@ -575,7 +630,9 @@ local host = {
                     end
 
                     local injected = (kb.flags & LLKHF_INJECTED) ~= 0
+                    local own = injected and isOwnTag(extra)
                     local autorepeat = false
+                    trackOwn(vk, t == "keyDown", injected, extra)
                     if t == "keyDown" then
                         local set = injected and injHeld or keyHeld
 
@@ -585,7 +642,7 @@ local host = {
                         injHeld[vk] = nil
                         if not injected then keyHeld[vk] = nil end
                     end
-                    local flags = eventFlags(vk, t == "keyDown", heldView())
+                    local flags = eventFlags(vk, t == "keyDown", heldView(), not own and ownOnlyView() or nil)
 
                     -- Modifier transition as flagsChanged
                     if MODIFIER_VK[vk] then t = "flagsChanged" end
@@ -656,6 +713,8 @@ local host = {
                 end
                 if evType then
                     local extra = tonumber(ms.dwExtraInfo)
+                    local injected = (ms.flags & LLMHF_INJECTED) ~= 0
+                    local own = injected and isOwnTag(extra)
                     local wheel = hiword
                     -- A move with a button held is a drag, named by that button.
                     if wp == WM_MOUSEMOVE then
@@ -665,13 +724,13 @@ local host = {
                     local ev = host.newEvent{
                         type    = evType,
                         keyCode = nil,
-                        flags   = currentFlags(),
+                        flags   = eventFlags(nil, false, heldView(), not own and ownOnlyView() or nil),
                         props   = {
                             x            = tonumber(ms.pt.x),
                             y            = tonumber(ms.pt.y),
                             buttonNumber = evButton,
                             mouseData    = wheel,
-                            injected     = (ms.flags & LLMHF_INJECTED) ~= 0,
+                            injected     = injected,
                             extra        = extra,
                         },
                     }
