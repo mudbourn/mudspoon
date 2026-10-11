@@ -234,6 +234,121 @@ BOOL   IsIconic(HWND);
         end
         return true
     end
+
+    -- Builds a uielement watcher fed by the shared WinEvent source for this app
+    function App:newWatcher(fn, userdata)
+        local win = require("hs.window")
+        local app = self
+        local pid = self._pid
+        local W = host.winEvents
+        local EV = require("hs.uielement").watcher
+        local GWL_STYLE = -16
+        local WS_CHILD = 0x40000000
+        local rect = ffi.new("RECT")
+        local wanted = {}
+        local known = {}
+        local unsub
+        local watcher = {}
+
+        -- Fires fn for one window with the mapped event name
+        local function emit(hwnd, event)
+            if not wanted[event] then return end
+
+            fn(win._newWindow(hwnd), event, watcher, userdata)
+        end
+
+        -- Reads hwnd geometry and minimized state into one cached record
+        local function sample(hwnd)
+            if U.GetWindowRect(hwnd, rect) == 0 then return nil end
+
+            return {
+                x = rect.left,
+                y = rect.top,
+                w = rect.right - rect.left,
+                h = rect.bottom - rect.top,
+                min = U.IsIconic(hwnd) ~= 0,
+            }
+        end
+
+        -- Maps one WinEvent to uielement watcher events for this pid
+        local function onEvent(event, hwnd, idObject, idChild)
+            if hwnd == nil or idObject ~= W.OBJID_WINDOW or idChild ~= W.CHILDID_SELF then return end
+            if win._pidOf(hwnd) ~= pid then return end
+            if (tonumber(U.GetWindowLongA(hwnd, GWL_STYLE)) & WS_CHILD) ~= 0 then return end
+
+            local key = tonumber(ffi.cast("uintptr_t", hwnd))
+
+            if event == W.objectCreate then
+                emit(hwnd, EV.windowCreated)
+            elseif event == W.locationChange then
+                local now = sample(hwnd)
+                local old = known[key]
+
+                if not now then return end
+
+                known[key] = now
+
+                if not old then return end
+
+                if now.min ~= old.min then
+                    emit(hwnd, now.min and EV.windowMinimized or EV.windowUnminimized)
+                elseif not now.min then
+                    if now.w ~= old.w or now.h ~= old.h then
+                        emit(hwnd, EV.windowResized)
+                    end
+
+                    if now.x ~= old.x or now.y ~= old.y then
+                        emit(hwnd, EV.windowMoved)
+                    end
+                end
+            end
+        end
+
+        -- Starts delivery for the given watcher event names
+        function watcher:start(events)
+            wanted = {}
+
+            for _, name in ipairs(events or {}) do
+                wanted[name] = true
+            end
+
+            known = {}
+
+            for _, hwnd in ipairs(win._enumTopLevel()) do
+                if win._pidOf(hwnd) == pid then
+                    known[tonumber(ffi.cast("uintptr_t", hwnd))] = sample(hwnd)
+                end
+            end
+
+            if not unsub then unsub = host.onWinEvent(onEvent) end
+
+            return self
+        end
+
+        -- Unsubscribes and drops cached window state
+        function watcher:stop()
+            if unsub then
+                unsub()
+                unsub = nil
+            end
+
+            known = {}
+
+            return self
+        end
+
+        -- Returns the application this watcher observes
+        function watcher:element()
+            return app
+        end
+
+        -- Returns the observed process id
+        function watcher:pid()
+            return pid
+        end
+
+        return watcher
+    end
 -- END --
 
 -- Public API --
@@ -338,12 +453,9 @@ BOOL   IsIconic(HWND);
     --                             terminated. Seeded at start() from currently-open
     --                             windows so already-running apps don't spuriously
     --                             report launched/terminated.
-    -- `launching`, `hidden`, `unhidden` have no faithful Win32 analog and never fire:
-    -- there is no pre-launch signal, and Windows has no application-level hide (a
-    -- top-level window SHOW/HIDE is per-window paint churn -- one app launch emits a
-    -- dozen of them -- so mapping those to app hidden/unhidden is noise, not signal).
-    -- The constants stay for API compatibility; only launched/terminated/activated/
-    -- deactivated actually fire.
+    --   hidden / unhidden       : every visible window of a pid becoming minimized,
+    --                             and back to at least one restored window.
+    -- `launching` has no Win32 analog and never fires.
     local pidBufW = ffi.new("DWORD[1]")
     local function pidOfHwnd(hwnd)
         if hwnd == nil then return nil end
@@ -359,6 +471,8 @@ BOOL   IsIconic(HWND);
     function watcherProto:start()
         if self._unsub then return self end
         self._front = nil   -- pid of the last-activated app
+        self._iconic = {}
+        self._hidden = {}
         self._known = {}     -- pid -> true for every app we currently know owns a window
         self._names = {}     -- pid -> last-known name, so terminated can name a dead pid
         self._lastSweep = 0  -- host.now() of the last isRunning sweep (throttle)
@@ -433,6 +547,25 @@ BOOL   IsIconic(HWND);
             -- Top-level window objects only (child controls / caret / cursor excluded).
             if idObject ~= W.OBJID_WINDOW or idChild ~= W.CHILDID_SELF then return end
 
+            -- Reports hidden or unhidden when a known pid flips between all-minimized and not
+            if event == W.locationChange or event == W.objectShow or event == W.objectHide then
+                local pid = pidOfHwnd(hwnd)
+                local key = tonumber(ffi.cast("uintptr_t", hwnd))
+                local iconic = U.IsIconic(hwnd) ~= 0
+
+                if pid and self._known[pid] and (event ~= W.locationChange or iconic ~= (self._iconic[key] or false)) then
+                    self._iconic[key] = iconic
+
+                    local app = newApp(pid)
+                    local hidden = app:isHidden()
+
+                    if hidden ~= (self._hidden[pid] or false) then
+                        self._hidden[pid] = hidden
+                        fn(app:name(), hidden and application.watcher.hidden or application.watcher.unhidden, app)
+                    end
+                end
+            end
+
             -- A new top-level window from a pid we haven't named yet is a launch.
             -- (objectDestroy needs no branch: sweepDead above turns real process
             -- exits into terminated, whatever window handles were involved.)
@@ -451,6 +584,8 @@ BOOL   IsIconic(HWND);
         if self._unsub then self._unsub(); self._unsub = nil end
         self._known = nil
         self._names = nil
+        self._iconic = nil
+        self._hidden = nil
         return self
     end
 

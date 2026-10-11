@@ -585,7 +585,7 @@
       "status": "pass"
     },
     {
-      "detail": "file hash differs for abc.txt: native \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad *C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791584987_426173/abc.txt\\\n\" true 0, shell \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791584987_426173/abc.txt\\\n\" true 0",
+      "detail": "file hash differs for abc.txt: native \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad *C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791604661_458412/abc.txt\\\n\" true 0, shell \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  C:/Users/user/AppData/Local/Temp/mudspoon_hash_1791604661_458412/abc.txt\\\n\" true 0",
       "id": "execute.hash-parity",
       "kind": "behavior",
       "module": "execute",
@@ -732,6 +732,14 @@
       "status": "pass"
     },
     {
+      "id": "pathwatcher.fires-on-change",
+      "kind": "behavior-async",
+      "module": "pathwatcher",
+      "name": "fires-on-change",
+      "observed": "notified",
+      "status": "pass"
+    },
+    {
       "detail": "userInfo not round-tripped",
       "id": "distributednotifications.roundtrip",
       "kind": "behavior-async",
@@ -739,15 +747,7 @@
       "name": "roundtrip",
       "observed": "delivered",
       "status": "pass"
-    },
-    {
-      "id": "pathwatcher.fires-on-change",
-      "kind": "behavior-async",
-      "module": "pathwatcher",
-      "name": "fires-on-change",
-      "observed": "notified",
-      "status": "pass"
     }
   ],
-  "timestamp": "2026-10-09T22:29:47Z"
+  "timestamp": "2026-10-10T03:57:42Z"
 }

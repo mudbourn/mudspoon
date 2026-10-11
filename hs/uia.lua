@@ -16,6 +16,15 @@ if not okOleA then OLEA = nil end
     ffi.cdef[[
 typedef struct { unsigned long Data1; unsigned short Data2; unsigned short Data3; unsigned char Data4[8]; } GUID;
 
+typedef struct {
+    unsigned short vt;
+    unsigned short reserved1;
+    unsigned short reserved2;
+    unsigned short reserved3;
+    wchar_t*       bstrVal;
+    void*          reserved4;
+} UIAVariant;
+
 /* --- IUIAutomation ---------------------------------------------------------- */
 typedef struct IUIAutomationVtbl IUIAutomationVtbl;
 typedef struct { IUIAutomationVtbl* lpVtbl; } IUIAutomation;
@@ -45,7 +54,7 @@ struct IUIAutomationElementVtbl {
     void* FindFirstBuildCache;                                               /* 7  */
     void* FindAllBuildCache;                                                 /* 8  */
     void* BuildUpdatedCache;                                                 /* 9  */
-    void* GetCurrentPropertyValue;                                           /* 10 */
+    long          (__stdcall *GetCurrentPropertyValue)(void*, int, UIAVariant*); /* 10 */
     void* GetCurrentPropertyValueEx;                                         /* 11 */
     void* GetCachedPropertyValue;                                            /* 12 */
     void* GetCachedPropertyValueEx;                                          /* 13 */
@@ -57,14 +66,14 @@ struct IUIAutomationElementVtbl {
     void* GetCachedChildren;                                                 /* 19 */
     long          (__stdcall *get_CurrentProcessId)(void*, int*);            /* 20 */
     long          (__stdcall *get_CurrentControlType)(void*, int*);          /* 21 */
-    void* get_CurrentLocalizedControlType;                                   /* 22 */
+    long          (__stdcall *get_CurrentLocalizedControlType)(void*, wchar_t**); /* 22 */
     long          (__stdcall *get_CurrentName)(void*, wchar_t**);            /* 23 */
     void* get_CurrentAcceleratorKey;                                         /* 24 */
     void* get_CurrentAccessKey;                                              /* 25 */
     long          (__stdcall *get_CurrentHasKeyboardFocus)(void*, int*);     /* 26 */
     void* get_CurrentIsKeyboardFocusable;                                    /* 27 */
     void* get_CurrentIsEnabled;                                              /* 28 */
-    void* get_CurrentAutomationId;                                           /* 29 */
+    long          (__stdcall *get_CurrentAutomationId)(void*, wchar_t**);    /* 29 */
     void* get_CurrentClassName;                                              /* 30 */
     void* get_CurrentHelpText;                                               /* 31 */
     void* get_CurrentCulture;                                                /* 32 */
@@ -86,6 +95,7 @@ long CoCreateInstance(const GUID*, void*, unsigned long, const GUID*, void**);
 
 unsigned int SysStringLen(wchar_t*);
 void         SysFreeString(wchar_t*);
+long         VariantClear(UIAVariant*);
 
 int WideCharToMultiByte(unsigned int, unsigned long, const wchar_t*, int,
                         char*, int, const char*, int*);
@@ -96,6 +106,8 @@ int WideCharToMultiByte(unsigned int, unsigned long, const wchar_t*, int,
     local COINIT_APARTMENTTHREADED = 0x2
     local CLSCTX_INPROC_SERVER     = 0x1
     local CP_UTF8                  = 65001
+    local VT_BSTR                  = 8
+    local UIA_ValueValuePropertyId = 30045
 
     -- SUCCEEDED(hr): HRESULT is a signed 32-bit; the failure bit is the sign bit,
     -- so any negative value is a failure. S_OK == 0, S_FALSE == 1 both pass.
@@ -114,36 +126,70 @@ int WideCharToMultiByte(unsigned int, unsigned long, const wchar_t*, int,
     local CLSID_CUIAutomation = guid(0xff48dba4, 0x60ef, 0x4201, 0xaa,0x87,0x54,0x10,0x3e,0xef,0x59,0x4e)
     local IID_IUIAutomation   = guid(0x30cbe57d, 0xd9d0, 0x452a, 0xab,0x13,0x7a,0xc5,0xac,0x48,0x25,0xee)
 
-    -- A small, pragmatic UIA-ControlTypeId -> Hammerspoon-ish AXRole map. UIA control
-    -- types are 50000.. ; anything unmapped falls back to "AX"..id so callers still get
-    -- a stable string. Not exhaustive -- extend as mudscript needs more roles.
+    -- UIA control type id to the closest AX role
     local CONTROL_TYPE_ROLE = {
-        [50000] = "AXButton",     [50001] = "AXMenuBar",    [50002] = "AXRadioButton",
-        [50003] = "AXCheckBox",   [50004] = "AXComboBox",   [50005] = "AXComboBox",
-        [50008] = "AXTextField",  [50009] = "AXTextField",  [50011] = "AXStaticText",
-        [50020] = "AXStaticText", [50021] = "AXTable",      [50023] = "AXMenu",
-        [50024] = "AXMenuItem",   [50025] = "AXOutline",    [50026] = "AXTabGroup",
-        [50032] = "AXWindow",     [50033] = "AXGroup",      [50034] = "AXImage",
+        [50000] = "AXButton",
+        [50001] = "AXGroup",
+        [50002] = "AXCheckBox",
+        [50003] = "AXComboBox",
+        [50004] = "AXTextField",
+        [50005] = "AXLink",
+        [50006] = "AXImage",
+        [50007] = "AXCell",
+        [50008] = "AXList",
+        [50009] = "AXMenu",
+        [50010] = "AXMenuBar",
+        [50011] = "AXMenuItem",
+        [50012] = "AXProgressIndicator",
+        [50013] = "AXRadioButton",
+        [50014] = "AXScrollBar",
+        [50015] = "AXSlider",
+        [50016] = "AXIncrementor",
+        [50017] = "AXGroup",
+        [50018] = "AXTabGroup",
+        [50019] = "AXRadioButton",
+        [50020] = "AXStaticText",
+        [50021] = "AXToolbar",
+        [50022] = "AXHelpTag",
+        [50023] = "AXOutline",
+        [50024] = "AXRow",
+        [50025] = "AXUnknown",
+        [50026] = "AXGroup",
+        [50027] = "AXValueIndicator",
+        [50028] = "AXTable",
+        [50029] = "AXRow",
+        [50030] = "AXTextArea",
+        [50031] = "AXMenuButton",
+        [50032] = "AXWindow",
+        [50033] = "AXGroup",
+        [50034] = "AXGroup",
+        [50035] = "AXColumn",
+        [50036] = "AXTable",
+        [50037] = "AXGroup",
+        [50038] = "AXSplitter",
+        [50039] = "AXGroup",
+        [50040] = "AXToolbar",
     }
 -- END --
 
 local uia = { available = false }
 
--- BSTR (COM wide string) -> Lua UTF-8, then SysFreeString the BSTR. --
-    -- get_Current* string getters hand back a BSTR the caller must free. nil/empty in,
-    -- empty string out.
-    local function bstrToUtf8(pw)
+-- BSTR to UTF-8 --
+    local function bstrRead(pw)
         if pw == nil then return "" end
         local n = tonumber(OLEA.SysStringLen(pw))
-        if n <= 0 then OLEA.SysFreeString(pw); return "" end
+        if n <= 0 then return "" end
         local need = K.WideCharToMultiByte(CP_UTF8, 0, pw, n, nil, 0, nil, nil)
-        local out = ""
-        if need > 0 then
-            local buf = ffi.new("char[?]", need)
-            K.WideCharToMultiByte(CP_UTF8, 0, pw, n, buf, need, nil, nil)
-            out = ffi.string(buf, need)
-        end
-        OLEA.SysFreeString(pw)
+        if need <= 0 then return "" end
+        local buf = ffi.new("char[?]", need)
+        K.WideCharToMultiByte(CP_UTF8, 0, pw, n, buf, need, nil, nil)
+        return ffi.string(buf, need)
+    end
+
+    -- Reads a BSTR out-param and frees it
+    local function bstrToUtf8(pw)
+        local out = bstrRead(pw)
+        if pw ~= nil then OLEA.SysFreeString(pw) end
         return out
     end
 -- END --
@@ -180,6 +226,24 @@ local uia = { available = false }
             local out = ffi.new("wchar_t*[1]")
             if not ok(self._ptr.lpVtbl.get_CurrentName(self._ptr, out)) then return nil end
             return bstrToUtf8(out[0])
+        end
+        function Element:_localizedType()
+            local out = ffi.new("wchar_t*[1]")
+            if not ok(self._ptr.lpVtbl.get_CurrentLocalizedControlType(self._ptr, out)) then return nil end
+            return bstrToUtf8(out[0])
+        end
+        function Element:_automationId()
+            local out = ffi.new("wchar_t*[1]")
+            if not ok(self._ptr.lpVtbl.get_CurrentAutomationId(self._ptr, out)) then return nil end
+            return bstrToUtf8(out[0])
+        end
+        function Element:_value()
+            local v = ffi.new("UIAVariant")
+            if not ok(self._ptr.lpVtbl.GetCurrentPropertyValue(self._ptr, UIA_ValueValuePropertyId, v)) then return nil end
+            local result = nil
+            if v.vt == VT_BSTR then result = bstrRead(v.bstrVal) end
+            OLEA.VariantClear(v)
+            return result
         end
         function Element:_controlType()
             local out = ffi.new("int[1]")
@@ -225,7 +289,9 @@ local uia = { available = false }
     function Element:attributeValue(attr)
         if     attr == "AXRole"                then return self:role()
         elseif attr == "AXTitle"               then return self:_name()
-        elseif attr == "AXValue"               then return self:_name()
+        elseif attr == "AXRoleDescription"     then return self:_localizedType()
+        elseif attr == "AXIdentifier"          then return self:_automationId()
+        elseif attr == "AXValue"               then return self:_value()
         elseif attr == "AXFocused"             then return self:_hasFocus()
         elseif attr == "AXProcessIdentifier" or attr == "AXPID" then return self:_pid()
         elseif attr == "AXWindow"              then return self:_nativeWindow()
