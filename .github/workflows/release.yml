@@ -3,23 +3,23 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
 
 jobs:
-  build:
+  release:
     runs-on: windows-latest
-    env:
-      SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build the Lua runtime from source
-        shell: bash
-        run: ./setup.sh "$RUNNER_TEMP/runtime-build"
+      - name: Check the tag matches VERSION
+        shell: pwsh
+        run: |
+          $version = (Get-Content installer\VERSION -Raw).Trim()
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+              throw "Tag $env:GITHUB_REF_NAME does not match installer\VERSION ($version)."
+          }
 
       - name: Install Inno Setup
         shell: pwsh
@@ -28,63 +28,15 @@ jobs:
               choco install innosetup --no-progress -y
           }
 
-      - name: Stage the app
+      - name: Build the installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1 -NoCompile
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1
 
-      - name: Upload unsigned binaries
-        id: upload-binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: binaries-unsigned
-          path: |
-            installer/build/stage/app/runtime/lua.exe
-            installer/build/stage/app/runtime/lua54.dll
-            installer/build/stage/app/runtime/cffi.dll
-          if-no-files-found: error
-
-      - name: Sign binaries
-        if: env.SIGN == 'true'
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: binaries
-          github-artifact-id: ${{ steps.upload-binaries.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: installer/build/stage/app/runtime
-
-      - name: Compile the installer
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1 -SkipStage
-
-      - name: Upload unsigned installer
-        id: upload-installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mudspoon-Setup-unsigned
-          path: installer/Output/Mudspoon-Setup.exe
-          if-no-files-found: error
-
-      - name: Sign installer
-        if: env.SIGN == 'true'
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: installer
-          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed
-
-      - name: Upload signed installer
-        if: env.SIGN == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mudspoon-Setup
-          path: signed/Mudspoon-Setup.exe
-          if-no-files-found: error
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = "installer\Output\Mudspoon-Setup.exe"
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash
+          gh release create $env:GITHUB_REF_NAME $setup --title $env:GITHUB_REF_NAME --notes "SHA-256 of Mudspoon-Setup.exe: $hash"

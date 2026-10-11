@@ -1,10 +1,5 @@
 # Builds installer\Output\Mudspoon-Setup.exe #
     # Usage: powershell -ExecutionPolicy Bypass -File installer\build.ps1
-param(
-    [switch]$NoCompile,
-    [switch]$SkipStage
-)
-
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 
@@ -33,12 +28,12 @@ Add-Type -AssemblyName System.Drawing
 
     $iscc = Find-Iscc
 
-    if (-not $iscc -and -not $NoCompile) {
+    if (-not $iscc) {
         winget install --id JRSoftware.InnoSetup -e --silent --accept-source-agreements --accept-package-agreements
         $iscc = Find-Iscc
     }
 
-    if (-not $iscc -and -not $NoCompile) { throw "ISCC.exe not found and the winget install did not provide it." }
+    if (-not $iscc) { throw "ISCC.exe not found and the winget install did not provide it." }
 # END #
 
 # Image helpers #
@@ -165,59 +160,53 @@ Add-Type -AssemblyName System.Drawing
 # END #
 
 # Stage the host #
-    if (-not $SkipStage) {
-        if (Test-Path $Build) { Remove-Item -Recurse -Force $Build }
+    if (Test-Path $Build) { Remove-Item -Recurse -Force $Build }
 
-        $app = Join-Path $Stage "app"
-        New-Item -ItemType Directory -Force -Path $app | Out-Null
+    $app = Join-Path $Stage "app"
+    New-Item -ItemType Directory -Force -Path $app | Out-Null
 
-        $topFiles = @(
-            "main.lua",
-            "launch.ps1",
-            "stop.ps1",
-            "watchdog.ps1",
-            "tray.ps1",
-            "Mudspoon.vbs",
-            "Mudspoon.cmd",
-            "Stop-Mudspoon.cmd",
-            "hs.cmd",
-            "WebView2Loader.dll",
-            "README.md"
-        )
+    $topFiles = @(
+        "main.lua",
+        "launch.ps1",
+        "stop.ps1",
+        "watchdog.ps1",
+        "tray.ps1",
+        "Mudspoon.vbs",
+        "Mudspoon.cmd",
+        "Stop-Mudspoon.cmd",
+        "hs.cmd",
+        "WebView2Loader.dll",
+        "README.md"
+    )
 
-        foreach ($f in $topFiles) { Copy-Item (Join-Path $Repo $f) $app }
+    foreach ($f in $topFiles) { Copy-Item (Join-Path $Repo $f) $app }
 
-        foreach ($d in @("hs", "bin", "compat")) {
-            Copy-Item (Join-Path $Repo $d) (Join-Path $app $d) -Recurse
-        }
-
-        Get-ChildItem $app -Recurse -File |
-            Where-Object { $_.Extension -in @(".md", ".txt", ".log") -and $_.Name -ne "README.md" } |
-            Remove-Item -Force
-
-        Copy-Item (Join-Path $Assets "mudspoon.ico") $app
-        Copy-Item (Join-Path $Here "VERSION") $app
+    foreach ($d in @("hs", "bin", "compat")) {
+        Copy-Item (Join-Path $Repo $d) (Join-Path $app $d) -Recurse
     }
+
+    Get-ChildItem $app -Recurse -File |
+        Where-Object { $_.Extension -in @(".md", ".txt", ".log") -and $_.Name -ne "README.md" } |
+        Remove-Item -Force
+
+    Copy-Item (Join-Path $Assets "mudspoon.ico") $app
+    Copy-Item (Join-Path $Here "VERSION") $app
 # END #
 
 # Stage the Lua runtime #
-    if (-not $SkipStage) {
-        $rt = Join-Path $Stage "app\runtime"
-        New-Item -ItemType Directory -Force -Path $rt | Out-Null
+    $rt = Join-Path $app "runtime"
+    New-Item -ItemType Directory -Force -Path $rt | Out-Null
 
-        foreach ($f in @("lua.exe", "lua54.dll", "cffi.dll")) {
-            Copy-Item (Join-Path $Repo "runtime\$f") $rt
-        }
+    foreach ($f in @("lua.exe", "lua54.dll", "cffi.dll")) {
+        Copy-Item (Join-Path $Repo "runtime\$f") $rt
     }
 # END #
 
 # Compile #
-    if (-not $NoCompile) {
-        & $iscc "/DAppVersion=$Version" "/DStageDir=$Stage" "/DAssetsDir=$Assets" (Join-Path $Here "Mudspoon.iss")
+    & $iscc "/DAppVersion=$Version" "/DStageDir=$Stage" "/DAssetsDir=$Assets" (Join-Path $Here "Mudspoon.iss")
 
-        if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)." }
+    if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)." }
 
-        $setup = Join-Path $Here "Output\Mudspoon-Setup.exe"
-        Write-Host ("Built {0} ({1:N1} MB)" -f $setup, ((Get-Item $setup).Length / 1MB))
-    }
+    $setup = Join-Path $Here "Output\Mudspoon-Setup.exe"
+    Write-Host ("Built {0} ({1:N1} MB)" -f $setup, ((Get-Item $setup).Length / 1MB))
 # END #

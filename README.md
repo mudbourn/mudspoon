@@ -12,6 +12,19 @@ Hammerspoon: process identity (`hs.processInfo.bundleID`), window classes
 The host runs at a physical console session. RDP intercepts input and
 misreports the low-level hooks.
 
+## Install
+
+In PowerShell or Command Prompt:
+
+```
+winget install mudbourn.Mudspoon
+```
+
+This installs Hammerspoon for Windows for the current user and adds Start menu
+and desktop shortcuts. `winget upgrade mudbourn.Mudspoon` updates it.
+`Mudspoon-Setup.exe` from the GitHub releases page installs the same thing, but
+Windows warns about it because the installer is not code signed.
+
 ## Layout
 
 - `main.lua`: the host glue that Hammerspoon.app normally provides. It builds
@@ -99,28 +112,10 @@ exercises of the FFI architecture.
 
 ## Known limits
 
-- Builds made outside the Release workflow are unsigned. A background process
-  with a global keyboard hook can be flagged by antivirus and SmartScreen.
+- The host is unsigned. A background process with a global keyboard hook can be
+  flagged by antivirus and SmartScreen.
 - The host runs at user level. A game running elevated needs the host run as
   administrator to receive its input.
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/),
-certificate by [SignPath Foundation](https://signpath.org/).
-
-- Signed files: `Mudspoon-Setup.exe` and `runtime\lua.exe`, `runtime\lua54.dll`
-  and `runtime\cffi.dll`, built from this repository by the Release workflow in
-  `.github/workflows/release.yml`.
-- Committers and reviewers: [mudbourn](https://github.com/mudbourn)
-- Approvers: [mudbourn](https://github.com/mudbourn)
-- `bin\busybox.exe` is [busybox-w32](https://frippery.org/busybox/) and
-  `WebView2Loader.dll` is Microsoft's. Neither is signed by this project.
-
-## Privacy
-
-This program does not send any information to any networked system unless
-the user's own Hammerspoon config asks it to.
 
 ## License
 

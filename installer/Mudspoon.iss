@@ -41,7 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 WelcomeLabel2=This installs Hammerspoon for Windows %1, for bug testing.%n%nIt must run at the physical console of the PC. Remote Desktop (RDP) intercepts input and breaks the keyboard and mouse hooks.%n%nTo report a bug, open the Start menu and choose Send Hammerspoon bug report. It saves a zip of the logs on your Desktop and opens Explorer on it. Send that zip back along with what you were doing.
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"
 Name: "autostart"; Description: "Start Hammerspoon when I sign in"; Flags: unchecked
 
 [Files]
