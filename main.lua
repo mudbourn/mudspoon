@@ -318,7 +318,7 @@ int MoveFileExA(const char*, const char*, unsigned long);
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
         "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus",
-        "distributednotifications", "processInfo", "image", "settings", "socket", "chooser" }
+        "distributednotifications", "processInfo", "image", "settings", "socket", "chooser", "hash" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)
@@ -458,6 +458,17 @@ int MoveFileExA(const char*, const char*, unsigned long);
     hs.openConsole = function(...) return require("hs.console").open(...) end
 
     hs.closeConsole = function() return require("hs.console").close() end
+
+    -- Opens a file, folder or URL with its default handler
+    hs.open = function(target)
+        if type(target) ~= "string" or target == "" then return false end
+
+        local file = target:find("^%a[%w+.-]*://") and target or target:gsub("/", "\\")
+
+        return require("hs.shims").launch({
+            file = file,
+        }) == 0
+    end
 -- END --
 
 -- hs.loadSpoon --

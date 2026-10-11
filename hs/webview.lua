@@ -350,6 +350,7 @@ int     SetWindowRgn(HWND, HRGN, BOOL);
     local LWA_ALPHA         = 0x02
 
     local WM_DESTROY        = 0x0002
+    local WM_ACTIVATE       = 0x0006
     local WM_ERASEBKGND     = 0x0014
 
     -- SetWindowPos flags + special HWND z-order sentinels.
@@ -461,9 +462,31 @@ int     SetWindowRgn(HWND, HRGN, BOOL);
     local classBuf = ffi.new("char[?]", #CLASS + 1)
     ffi.copy(classBuf, CLASS)
 
+    -- Live webviews keyed by host window address
+    local byHwnd = {}
+
+    -- The table key for a host window handle
+    local function hwndKey(hwnd)
+        return tonumber(ffi.cast("uintptr_t", hwnd))
+    end
+
+    -- Runs a webview's windowCallback with action and state
+    local function notifyWindow(hwnd, action, state)
+        local self = byHwnd[hwndKey(hwnd)]
+        local fn = self and self._windowCallback
+
+        if not fn then return end
+
+        local ok, err = pcall(fn, action, self, state)
+
+        if not ok then io.stderr:write("hs.webview windowCallback error: " .. tostring(err) .. "\n") end
+    end
+
     -- A Lua error must NEVER unwind through DispatchMessage (FFI boundary) -- guard it.
     local wndProc = keep(ffi.cast("WNDPROC", function(hwnd, msg, wp, lp)
-        if msg == WM_DESTROY then
+        if msg == WM_ACTIVATE then
+            pcall(notifyWindow, hwnd, "focusChange", (tonumber(wp) & 0xFFFF) ~= 0)
+        elseif msg == WM_DESTROY then
             return 0
         elseif msg == WM_ERASEBKGND then
             -- Claim the erase so Windows never blanks the host between frames. The
@@ -795,6 +818,13 @@ webview.usercontent = usercontent
         return self
     end
 
+    -- Sets fn(action, webview, state) for window events, nil clears it. Only focusChange is reported
+    function Webview:windowCallback(fn)
+        self._windowCallback = fn
+
+        return self
+    end
+
     -- :show() -- reveal the host window (no activation) and the controller.
     function Webview:show()
         if self._deleted then return self end
@@ -911,6 +941,8 @@ webview.usercontent = usercontent
         self._controller = nil
         self._core       = nil
         if self._hwnd ~= nil then
+            byHwnd[hwndKey(self._hwnd)] = nil
+
             U.DestroyWindow(self._hwnd)
             self._hwnd = nil
         end
@@ -1228,6 +1260,9 @@ webview.usercontent = usercontent
                 _allowTextEntry = false,
                 _mask           = windowMasks.borderless,
             }, Webview)
+
+            byHwnd[hwndKey(hwnd)] = self
+
             startBringUp(self)
             return self
         end
@@ -1269,6 +1304,8 @@ webview.usercontent = usercontent
             _allowTextEntry = false,
             _mask           = windowMasks.borderless,
         }, Webview)
+
+        byHwnd[hwndKey(hwnd)] = self
 
         startBringUp(self)
         return self

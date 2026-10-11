@@ -86,6 +86,16 @@ Win32 code and is intentionally absent — do not rely on it.
   remove the handler; the hook uninstalls when the last one leaves.
 - `fn` receives an event object. **Return `true` to swallow** — the OS never sees
   the event and later subscribers do not run.
+- `mouseMoved` and `*MouseDragged` reach subscribers from the runloop, not the
+  hook. Moves arriving faster than one per 8 ms collapse into the latest one,
+  and a move cannot be swallowed. A pending move is delivered before any other
+  mouse event, so order is kept.
+- A move counts as a drag only while the system still reports that button
+  down. A held button the system reports up is cleared, unless a subscriber
+  swallowed its down event.
+- The host checks every 2 s for input that neither hook saw for over 1 s,
+  reinstalls both hooks when it finds some and logs it to stderr. A hook call
+  over 50 ms is logged to stderr.
 
 ### Sync wait (an extension of contract 3)
 
@@ -95,7 +105,8 @@ A module that must block the thread on an external process calls
 
 - While a sync wait is active the hook procs run no subscriber. They keep the
   held key and button state current and pass every event on with
-  `CallNextHookEx`. Timers do not fire.
+  `CallNextHookEx`. Timers do not fire. Mouse button events seen during the
+  wait are queued and dispatched once it ends, and cannot be swallowed.
 - The waiting code must keep servicing sent messages, for example
   `MsgWaitForMultipleObjects` with `QS_SENDMESSAGE` followed by `PeekMessage`
   with `PM_NOREMOVE | PM_QS_SENDMESSAGE`. Without that

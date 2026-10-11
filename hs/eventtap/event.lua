@@ -385,6 +385,13 @@ UINT MapVirtualKeyW(UINT, UINT);
         self._props[k] = v
         return self
     end
+
+    -- Sets the event type, one of hs.eventtap.event.types
+    host.eventProto.setType = function(self, t)
+        self._type = t
+
+        return self
+    end
 -- END --
 
 local event = {}

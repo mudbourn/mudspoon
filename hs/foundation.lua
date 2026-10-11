@@ -69,6 +69,9 @@ typedef void (__stdcall *WINEVENTPROC)(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, D
 HWINEVENTHOOK SetWinEventHook(DWORD, DWORD, HMODULE, WINEVENTPROC, DWORD, DWORD, DWORD);
 BOOL    UnhookWinEvent(HWINEVENTHOOK);
 short   GetAsyncKeyState(int);
+
+typedef struct { UINT cbSize; DWORD dwTime; } LASTINPUTINFO;
+BOOL    GetLastInputInfo(LASTINPUTINFO*);
 BOOL    PeekMessageA(MSG*, HWND, UINT, UINT, UINT);
 BOOL    TranslateMessage(const MSG*);
 LRESULT DispatchMessageA(const MSG*);
@@ -433,6 +436,39 @@ local host = {
     local DRAG_TYPE = { [0] = "leftMouseDragged", [1] = "rightMouseDragged", [2] = "otherMouseDragged", [3] = "otherMouseDragged", [4] = "otherMouseDragged" }
     local btnHeld = { [0] = false, [1] = false, [2] = false, [3] = false, [4] = false }
 
+    -- Buttons whose down event a subscriber swallowed
+    local btnSwallowed = {
+        [0] = false,
+        [1] = false,
+        [2] = false,
+        [3] = false,
+        [4] = false,
+    }
+
+    -- Virtual keys that report each button down, either primary for a swapped mouse
+    local BTN_VK = {
+        [0] = { 0x01, 0x02 },
+        [1] = { 0x01, 0x02 },
+        [2] = { 0x04 },
+        [3] = { 0x05 },
+        [4] = { 0x06 },
+    }
+
+    -- Clears a held button the system no longer reports down
+    local function resyncButtons()
+        for b = 0, 4 do
+            if btnHeld[b] and not btnSwallowed[b] then
+                local held = false
+
+                for _, vk in ipairs(BTN_VK[b]) do
+                    if down(vk) then held = true end
+                end
+
+                btnHeld[b] = held
+            end
+        end
+    end
+
     -- The held button (lowest number = highest priority) driving a drag, or nil.
     local function dragButton()
         if btnHeld[0] then return 0 end
@@ -470,10 +506,17 @@ local host = {
         end
     end
 
+    -- Tick count of the last event either hook saw
+    local lastHookTick
+
     -- Sync wait --
-        -- Count of synchronous waits in progress. While it is above zero the hook
-        -- procs run no subscriber and only keep held state current.
+        -- Count of synchronous waits in progress
         local syncWait = 0
+
+        -- Mouse button events seen during a sync wait, dispatched once it ends
+        local syncQueue = {}
+
+        local drainSyncQueue
 
         -- Starts a synchronous wait. The caller blocks the thread but keeps servicing
         -- sent messages, so the hooks stay responsive and pass every event through.
@@ -484,6 +527,8 @@ local host = {
         -- Ends a synchronous wait started by host.beginSyncWait
         function host.endSyncWait()
             if syncWait > 0 then syncWait = syncWait - 1 end
+
+            if syncWait == 0 and #syncQueue > 0 then schedule(0, drainSyncQueue) end
         end
 
         -- True while a synchronous wait is in progress
@@ -501,6 +546,8 @@ local host = {
             local kb = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
             local vk = tonumber(kb.vkCode)
             local injected = (kb.flags & LLKHF_INJECTED) ~= 0
+
+            lastHookTick = tonumber(kb.time)
 
             trackOwn(vk, t == "keyDown", injected, tonumber(kb.dwExtraInfo))
 
@@ -549,6 +596,78 @@ local host = {
         return swallow
     end
 
+    -- Move coalescing --
+        -- Shortest gap between two delivered moves
+        local MOVE_INTERVAL_MS = 8
+
+        local pendingMove
+        local moveTimer
+        local lastMoveFlush = 0
+
+        -- Delivers the pending move, if any, to the mouse subscribers
+        local function flushMove()
+            if moveTimer then
+                moveTimer:cancel()
+
+                moveTimer = nil
+            end
+
+            local ev = pendingMove
+
+            if not ev then return end
+
+            pendingMove = nil
+            lastMoveFlush = host.now()
+
+            dispatch(mouseSubs, ev)
+        end
+
+        -- Keeps ev as the latest move and schedules its delivery on the runloop
+        local function queueMove(ev)
+            pendingMove = ev
+
+            if moveTimer then return end
+
+            local wait = lastMoveFlush + MOVE_INTERVAL_MS - host.now()
+
+            moveTimer = schedule(wait > 0 and wait or 0, flushMove)
+        end
+    -- END --
+
+    -- Dispatches the button events queued during a sync wait
+    drainSyncQueue = function()
+        if #syncQueue == 0 then return end
+
+        local queued = syncQueue
+
+        syncQueue = {}
+
+        flushMove()
+
+        for _, ev in ipairs(queued) do
+            dispatch(mouseSubs, ev)
+        end
+    end
+
+    -- Hook latency --
+        -- Time in one hook call that gets logged
+        local SLOW_HOOK_MS = 50
+
+        local lastSlowReport = 0
+
+        -- Logs a hook call slower than SLOW_HOOK_MS, at most once a second
+        local function noteLatency(kind, started)
+            local now = host.now()
+            local spent = now - started
+
+            if spent < SLOW_HOOK_MS or now - lastSlowReport < 1000 then return end
+
+            lastSlowReport = now
+
+            io.stderr:write(("hammerspoon slow %s hook: %d ms\n"):format(kind, math.floor(spent)))
+        end
+    -- END --
+
     -- Emergency stop. Ctrl+Alt+Pause (or Ctrl+Alt+Break) in the key hook calls this;
     -- so can a consumer. It snapshots the keys/buttons the hooks think are held,
     -- clears that state, and hands the snapshot to every registered handler so they
@@ -576,7 +695,10 @@ local host = {
         for vk in pairs(keyHeld) do keyHeld[vk] = nil end
         for vk in pairs(injHeld) do injHeld[vk] = nil end
         for vk in pairs(ownHeld) do ownHeld[vk] = nil end
-        for b = 0, 4 do btnHeld[b] = false end
+        for b = 0, 4 do
+            btnHeld[b] = false
+            btnSwallowed[b] = false
+        end
         local snap = {
             keys    = heldKeys,
             buttons = heldBtns,
@@ -619,6 +741,9 @@ local host = {
                     local kb    = ffi.cast("KBDLLHOOKSTRUCT*", lParam)
                     local extra = tonumber(kb.dwExtraInfo)
                     local vk    = tonumber(kb.vkCode)
+
+                    lastHookTick = tonumber(kb.time)
+
                     if t == "keyDown" and (vk == VK_PAUSE or vk == VK_CANCEL)
                         and down(VK_CONTROL) and down(VK_MENU) then
                         pcall(host.panic, "hotkey")
@@ -664,14 +789,23 @@ local host = {
             return swallow
         end
         keyProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+            local started = host.now()
+            local swallow = false
+
             if syncWait > 0 then
                 pcall(trackKey, nCode, wParam, lParam)
-                return U.CallNextHookEx(nil, nCode, wParam, lParam)
+            else
+                local ok, res = pcall(keyBody, nCode, wParam, lParam)
+
+                if not ok then io.stderr:write("hammerspoon key hook error: " .. tostring(res) .. "\n") end
+
+                swallow = ok and res
             end
 
-            local ok, swallow = pcall(keyBody, nCode, wParam, lParam)
-            if not ok then io.stderr:write("hammerspoon key hook error: " .. tostring(swallow) .. "\n") end
-            if ok and swallow then return 1 end
+            noteLatency("key", started)
+
+            if swallow then return 1 end
+
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
         end
@@ -683,71 +817,142 @@ local host = {
 
     local function installMouseHook()
         if not mouseProc then
+        -- Updates held buttons for a mouse message and builds its event, or nil
+        local function mouseEvent(wp, ms)
+            local hiword = highWord(tonumber(ms.mouseData))
+            local evType, evButton
+
+            if wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP then
+                evButton = 2 + (hiword & 0xFFFF)
+                evType   = (wp == WM_XBUTTONDOWN) and "otherMouseDown" or "otherMouseUp"
+                btnHeld[evButton] = (wp == WM_XBUTTONDOWN)
+            else
+                local dn = BTN_DOWN[wp]
+                if dn then btnHeld[dn] = true end
+
+                local up = BTN_UP[wp]
+                if up then btnHeld[up] = false end
+
+                local m = MOUSE_TYPE[wp]
+                if m then evType, evButton = m[1], m[2] end
+            end
+
+            if not evType then return nil end
+
+            -- A move with a button held is a drag, named by that button
+            if wp == WM_MOUSEMOVE then
+                resyncButtons()
+
+                local db = dragButton()
+                if db then evType, evButton = DRAG_TYPE[db], db end
+            end
+
+            local extra = tonumber(ms.dwExtraInfo)
+            local injected = (ms.flags & LLMHF_INJECTED) ~= 0
+            local own = injected and isOwnTag(extra)
+
+            local ev = host.newEvent{
+                type    = evType,
+                keyCode = nil,
+                flags   = eventFlags(nil, false, heldView(), not own and ownOnlyView() or nil),
+                props   = {
+                    x            = tonumber(ms.pt.x),
+                    y            = tonumber(ms.pt.y),
+                    buttonNumber = evButton,
+                    mouseData    = hiword,
+                    injected     = injected,
+                    extra        = extra,
+                },
+            }
+
+            return ev, evButton
+        end
+
+        -- True for a button down or up message
+        local function isButtonMessage(wp)
+            return BTN_DOWN[wp] ~= nil or BTN_UP[wp] ~= nil or wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP
+        end
+
+        -- Mouse hook body during a sync wait, queueing button events for later dispatch
+        local function syncMouse(nCode, wParam, lParam)
+            if nCode < 0 then return end
+
+            local wp = tonumber(wParam)
+            local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
+
+            lastHookTick = tonumber(ms.time)
+
+            local daemon = externalOwner and tonumber(ms.dwExtraInfo) == EXTERNAL_SIGNATURE
+
+            if daemon or not isButtonMessage(wp) then
+                trackMouse(nCode, wParam, lParam)
+
+                return
+            end
+
+            local ev = mouseEvent(wp, ms)
+
+            if ev then syncQueue[#syncQueue + 1] = ev end
+        end
+
         -- Mouse hook body, run under pcall
         local function mouseBody(nCode, wParam, lParam)
-            local swallow = false
-            if nCode >= 0 then
-                local wp = tonumber(wParam)
-                local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
-                if externalOwner and tonumber(ms.dwExtraInfo) == EXTERNAL_SIGNATURE then
-                    trackMouse(nCode, wParam, lParam)
+            if nCode < 0 then return false end
 
-                    return false
-                end
+            local wp = tonumber(wParam)
+            local ms = ffi.cast("MSLLHOOKSTRUCT*", lParam)
 
-                -- WM_MOUSEWHEEL packs the signed delta in the high word of mouseData;
-                -- WM_XBUTTON* packs the thumb-button id (XBUTTON1=1, XBUTTON2=2) there.
-                local hiword = highWord(tonumber(ms.mouseData))
-                -- Track button state before typing the event so a move that arrives
-                -- in the same held-button window is seen as a drag.
-                local evType, evButton
-                if wp == WM_XBUTTONDOWN or wp == WM_XBUTTONUP then
-                    evButton = 2 + (hiword & 0xFFFF)
-                    evType   = (wp == WM_XBUTTONDOWN) and "otherMouseDown" or "otherMouseUp"
-                    btnHeld[evButton] = (wp == WM_XBUTTONDOWN)
-                else
-                    local dn = BTN_DOWN[wp]; if dn then btnHeld[dn] = true  end
-                    local up = BTN_UP[wp];   if up then btnHeld[up] = false end
-                    local m = MOUSE_TYPE[wp]
-                    if m then evType, evButton = m[1], m[2] end
-                end
-                if evType then
-                    local extra = tonumber(ms.dwExtraInfo)
-                    local injected = (ms.flags & LLMHF_INJECTED) ~= 0
-                    local own = injected and isOwnTag(extra)
-                    local wheel = hiword
-                    -- A move with a button held is a drag, named by that button.
-                    if wp == WM_MOUSEMOVE then
-                        local db = dragButton()
-                        if db then evType, evButton = DRAG_TYPE[db], db end
-                    end
-                    local ev = host.newEvent{
-                        type    = evType,
-                        keyCode = nil,
-                        flags   = eventFlags(nil, false, heldView(), not own and ownOnlyView() or nil),
-                        props   = {
-                            x            = tonumber(ms.pt.x),
-                            y            = tonumber(ms.pt.y),
-                            buttonNumber = evButton,
-                            mouseData    = wheel,
-                            injected     = injected,
-                            extra        = extra,
-                        },
-                    }
-                    if dispatch(mouseSubs, ev) then swallow = true end
-                end
+            lastHookTick = tonumber(ms.time)
+
+            if externalOwner and tonumber(ms.dwExtraInfo) == EXTERNAL_SIGNATURE then
+                trackMouse(nCode, wParam, lParam)
+
+                return false
             end
+
+            drainSyncQueue()
+
+            local ev, button = mouseEvent(wp, ms)
+
+            if not ev then return false end
+
+            if wp == WM_MOUSEMOVE then
+                queueMove(ev)
+
+                return false
+            end
+
+            flushMove()
+
+            local swallow = dispatch(mouseSubs, ev)
+
+            if BTN_DOWN[wp] or wp == WM_XBUTTONDOWN then
+                btnSwallowed[button] = swallow
+            elseif BTN_UP[wp] or wp == WM_XBUTTONUP then
+                btnSwallowed[button] = false
+            end
+
             return swallow
         end
+
         mouseProc = ffi.cast("HOOKPROC", function(nCode, wParam, lParam)
+            local started = host.now()
+            local swallow = false
+
             if syncWait > 0 then
-                pcall(trackMouse, nCode, wParam, lParam)
-                return U.CallNextHookEx(nil, nCode, wParam, lParam)
+                pcall(syncMouse, nCode, wParam, lParam)
+            else
+                local ok, res = pcall(mouseBody, nCode, wParam, lParam)
+
+                if not ok then io.stderr:write("hammerspoon mouse hook error: " .. tostring(res) .. "\n") end
+
+                swallow = ok and res
             end
 
-            local ok, swallow = pcall(mouseBody, nCode, wParam, lParam)
-            if not ok then io.stderr:write("hammerspoon mouse hook error: " .. tostring(swallow) .. "\n") end
-            if ok and swallow then return 1 end
+            noteLatency("mouse", started)
+
+            if swallow then return 1 end
+
             return U.CallNextHookEx(nil, nCode, wParam, lParam)
         end)
         end
@@ -795,11 +1000,79 @@ local host = {
         if not mouseHook then installMouseHook() end
     end
 
+    -- Hook watchdog --
+        -- Period of the removed-hook check
+        local HOOK_CHECK_MS = 2000
+
+        -- Input the hooks may miss before they count as removed
+        local HOOK_STALE_MS = 1000
+
+        -- Shortest gap between two reinstalls
+        local HOOK_REINSTALL_MS = 10000
+
+        local lastInput = ffi.new("LASTINPUTINFO")
+        local lastReinstall = -HOOK_REINSTALL_MS
+        local hookCheck
+
+        lastInput.cbSize = ffi.sizeof(lastInput)
+
+        -- Tick count of the last system input, or nil
+        local function lastInputTick()
+            if U.GetLastInputInfo(lastInput) == 0 then return nil end
+
+            return tonumber(lastInput.dwTime)
+        end
+
+        -- Reinstalls both hooks when the system saw input that neither hook did
+        local function checkHooks()
+            if not (keyHook and mouseHook) then return end
+
+            local tick = lastInputTick()
+
+            if not tick then return end
+
+            if not lastHookTick then
+                lastHookTick = tick
+
+                return
+            end
+
+            local gap = (tick - lastHookTick) & 0xFFFFFFFF
+
+            if gap >= 0x80000000 or gap < HOOK_STALE_MS then return end
+
+            if host.now() - lastReinstall < HOOK_REINSTALL_MS then return end
+
+            lastReinstall = host.now()
+            lastHookTick = tick
+
+            io.stderr:write(("hammerspoon hooks missed %d ms of input, reinstalling\n"):format(gap))
+
+            uninstallKeyHook()
+            uninstallMouseHook()
+
+            installKeyHook()
+            installMouseHook()
+        end
+
+        -- Starts the watchdog on the first hook subscription
+        local function watchHooks()
+            if hookCheck then return end
+
+            lastHookTick = lastInputTick()
+            hookCheck = schedule(HOOK_CHECK_MS, checkHooks, HOOK_CHECK_MS)
+        end
+    -- END --
+
     function host.onKey(fn)
+        watchHooks()
+
         return subscribe(keySubs, ensureKeyHook, uninstallKeyHook, fn)
     end
 
     function host.onMouse(fn)
+        watchHooks()
+
         return subscribe(mouseSubs, ensureMouseHook, uninstallMouseHook, fn)
     end
 
@@ -809,6 +1082,7 @@ local host = {
             externalOwner = on and true or false
 
             if externalOwner then
+                watchHooks()
                 ensureKeyHook()
                 ensureMouseHook()
                 return
