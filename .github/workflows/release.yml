@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the Lua runtime from source
+        shell: bash
+        run: ./setup.sh "$RUNNER_TEMP/runtime-build"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+              choco install innosetup --no-progress -y
+          }
+
+      - name: Stage the app
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1 -NoCompile
+
+      - name: Upload unsigned binaries
+        id: upload-binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-unsigned
+          path: |
+            installer/build/stage/app/runtime/lua.exe
+            installer/build/stage/app/runtime/lua54.dll
+            installer/build/stage/app/runtime/cffi.dll
+          if-no-files-found: error
+
+      - name: Sign binaries
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: binaries
+          github-artifact-id: ${{ steps.upload-binaries.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: installer/build/stage/app/runtime
+
+      - name: Compile the installer
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1 -SkipStage
+
+      - name: Upload unsigned installer
+        id: upload-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mudspoon-Setup-unsigned
+          path: installer/Output/Mudspoon-Setup.exe
+          if-no-files-found: error
+
+      - name: Sign installer
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Upload signed installer
+        if: env.SIGN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mudspoon-Setup
+          path: signed/Mudspoon-Setup.exe
+          if-no-files-found: error
