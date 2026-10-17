@@ -352,6 +352,15 @@ function console.getText()
     return ffi.string(buf, len)
 end
 
+-- Returns everything printed since boot, whether or not the window is open
+function console.getConsole()
+    local log = _G.__mudspoon_log
+
+    if log then return table.concat(log.tail) end
+
+    return console.getText()
+end
+
 -- Evaluates a line as if it was typed into the input
 function console.eval(source)
     evaluate(source)

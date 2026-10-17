@@ -143,10 +143,7 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         return U.IsWindowVisible(self._hwnd) ~= 0
     end
 
-    -- :isStandard() -> whether this is a normal application window: it has a title
-    -- bar (WS_CAPTION) and is not a palette/tool window (WS_EX_TOOLWINDOW). This is
-    -- the Windows analog of Hammerspoon's AXStandardWindow subrole check. An invalid
-    -- handle reports false (a dead window is not a standard window).
+    -- Reports a live captioned window that is not a tool window
     function Window:isStandard()
         if self._hwnd == nil or U.IsWindow(self._hwnd) == 0 then return false end
         local style = U.GetWindowLongA(self._hwnd, GWL_STYLE)
@@ -154,6 +151,24 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
         local hasCaption = (tonumber(style) & WS_CAPTION) == WS_CAPTION
         local isTool     = (tonumber(ex) & WS_EX_TOOLWINDOW) ~= 0
         return hasCaption and not isTool
+    end
+
+    -- Returns the accessibility role every top-level window has
+    function Window:role()
+        return "AXWindow"
+    end
+
+    -- Returns AXStandardWindow, AXFloatingWindow for a tool window, or AXUnknown
+    function Window:subrole()
+        if self:isStandard() then return "AXStandardWindow" end
+
+        if self._hwnd == nil or U.IsWindow(self._hwnd) == 0 then return "AXUnknown" end
+
+        if (tonumber(U.GetWindowLongA(self._hwnd, GWL_EXSTYLE)) & WS_EX_TOOLWINDOW) ~= 0 then
+            return "AXFloatingWindow"
+        end
+
+        return "AXUnknown"
     end
 
     function Window:isMinimized()

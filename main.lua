@@ -158,7 +158,13 @@ int MoveFileExA(const char*, const char*, unsigned long);
                 local text = table.concat(parts)
 
                 tail[#tail + 1] = text
-                if #tail > 2000 then table.remove(tail, 1) end
+                if #tail > 2000 then
+                    local n = #tail
+
+                    table.move(tail, 1001, n, 1)
+
+                    for i = n - 999, n do tail[i] = nil end
+                end
 
                 local sink = _G.__mudspoon_log.sink
                 if sink then pcall(sink, text) end
@@ -318,7 +324,8 @@ int MoveFileExA(const char*, const char*, unsigned long);
     local realExtra = { "alert", "json", "execute", "fs", "canvas", "geometry", "window", "application",
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
         "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus",
-        "distributednotifications", "processInfo", "image", "settings", "socket", "chooser", "hash" }
+        "distributednotifications", "processInfo", "image", "settings", "socket", "chooser", "hash",
+        "host", "caffeinate" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)

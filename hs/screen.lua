@@ -237,6 +237,70 @@ int  GetSystemMetrics(int);
             return screen.primaryScreen()
         end
     -- END --
+
+    -- hs.screen.watcher: fires when the monitor layout changes --
+        local watcherProto = {}
+
+        watcherProto.__index = watcherProto
+
+        screen.watcher = {}
+
+        -- Returns one string that changes whenever a monitor is added, removed or resized
+        local function layoutKey()
+            local parts = {}
+
+            for _, s in ipairs(screen.allScreens()) do
+                local f = s:fullFrame()
+
+                parts[#parts + 1] = string.format("%s:%d,%d,%d,%d", s:name(), f.x, f.y, f.w, f.h)
+            end
+
+            return table.concat(parts, "|")
+        end
+
+        -- Builds a watcher that calls fn with no arguments on a layout change
+        function screen.watcher.new(fn)
+            return setmetatable({
+                _fn = fn,
+                _timer = nil
+            }, watcherProto)
+        end
+
+        -- Alias of new, matching Hammerspoon's active-screen variant
+        function screen.watcher.newWithActiveScreen(fn)
+            return screen.watcher.new(fn)
+        end
+
+        -- Starts polling the monitor layout
+        function watcherProto:start()
+            if self._timer then return self end
+
+            local key = layoutKey()
+
+            self._timer = require("hs.timer").doEvery(1, function()
+                local now = layoutKey()
+
+                if now == key then return end
+
+                key = now
+
+                pcall(self._fn)
+            end)
+
+            return self
+        end
+
+        -- Stops polling
+        function watcherProto:stop()
+            if self._timer then
+                self._timer:stop()
+
+                self._timer = nil
+            end
+
+            return self
+        end
+    -- END --
 -- END --
 
 return screen
