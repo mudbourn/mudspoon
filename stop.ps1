@@ -30,6 +30,58 @@
             $found = $true
         }
 
+    # Hosts whose command line is unreadable, such as elevated ones #
+        $hidden = @(Get-CimInstance Win32_Process -Filter "Name='lua.exe'" |
+            Where-Object { -not $_.CommandLine } |
+            ForEach-Object { $_.ProcessId })
+
+        $webviewHosts = @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" |
+            Where-Object { $_.CommandLine -match 'webview-exe-name=lua\.exe' -and $_.CommandLine -match '\\Hammerspoon\\WebView2' } |
+            ForEach-Object { $_.ParentProcessId })
+
+        $denied = @()
+
+        foreach ($id in (@($hidden) + @($webviewHosts) | Sort-Object -Unique)) {
+            if ($stopped -contains $id) { continue }
+
+            $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
+
+            if (-not $proc -or $proc.ProcessName -ne 'lua') { continue }
+
+            Write-Host "[hammerspoon] stopping pid $id"
+
+            try {
+                Stop-Process -Id $id -Force -ErrorAction Stop
+
+                $stopped += $id
+
+                $found = $true
+            }
+            catch {
+                $denied += $id
+            }
+        }
+
+        if ($denied) {
+            Write-Host "[hammerspoon] pid $($denied -join ',') runs as administrator, asking to elevate"
+
+            $kill = 'Stop-Process -Force -Id ' + ($denied -join ',')
+
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($kill))
+
+            try {
+                Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $encoded
+
+                $stopped += $denied
+
+                $found = $true
+            }
+            catch {
+                Write-Host "[hammerspoon] could not stop pid $($denied -join ',')"
+            }
+        }
+    # END #
+
     $config = if ($env:MUDSPOON_CONFIG_DIR) { $env:MUDSPOON_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".hammerspoon" }
 
     $configKey = ([IO.Path]::GetFullPath($config)).TrimEnd('\').ToLower() + '\'

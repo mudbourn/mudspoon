@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to build, such as v0.1.1
+        description: Tag to build, such as v0.1.2. Created from the chosen branch if it does not exist yet
         required: true
 
 permissions:
@@ -28,11 +28,18 @@ jobs:
           $tag = $env:TAG.Trim()
           if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
           "TAG=$tag" >> $env:GITHUB_ENV
-
+          $remote = "https://github.com/${{ github.repository }}"
+          $found = git ls-remote --tags $remote "refs/tags/$tag"
+          if ($found) {
+              "REF=$tag" >> $env:GITHUB_ENV
+          }
+          else {
+              "REF=${{ github.sha }}" >> $env:GITHUB_ENV
+          }
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ env.REF }}
 
       - name: Check the tag matches VERSION
         shell: pwsh
@@ -65,7 +72,7 @@ jobs:
           gh release view $tag *> $null
 
           if ($LASTEXITCODE -ne 0) {
-              gh release create $tag --title $tag --notes "Mudspoon $tag"
+              gh release create $tag --target $env:REF --title $tag --notes "Mudspoon $tag"
           }
 
           gh release upload $tag $setup --clobber
