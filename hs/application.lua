@@ -222,12 +222,14 @@ BOOL   IsIconic(HWND);
         return true
     end
 
-    -- True when the app owns windows and all of them are minimized
+    -- True after :hide() until any of the app's windows is restored, as macOS hide
     function App:isHidden()
-        local ws = self:allWindows()
-        if #ws == 0 then return false end
-        for _, w in ipairs(ws) do
-            if U.IsIconic(w._hwnd) == 0 then return false end
+        if hiddenByPid[self._pid] == nil then return false end
+        for _, w in ipairs(self:allWindows()) do
+            if U.IsIconic(w._hwnd) == 0 then
+                hiddenByPid[self._pid] = nil
+                return false
+            end
         end
         return true
     end
@@ -443,8 +445,8 @@ BOOL   IsIconic(HWND);
     --                             terminated. Seeded at start() from currently-open
     --                             windows so already-running apps don't spuriously
     --                             report launched/terminated.
-    --   hidden / unhidden       : every visible window of a pid becoming minimized,
-    --                             and back to at least one restored window.
+    --   hidden / unhidden       : :hide() minimizing a pid's windows, and any of them
+    --                             being restored. Plain minimizing never fires them.
     -- `launching` has no Win32 analog and never fires.
     local pidBufW = ffi.new("DWORD[1]")
     local function pidOfHwnd(hwnd)

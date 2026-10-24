@@ -436,4 +436,78 @@ local uia = { available = false }
     end
 -- END --
 
+-- Elevation check (UIPI stands in for the macOS Accessibility permission) --
+    local elevDecls = {
+        "HANDLE OpenProcess(DWORD, BOOL, DWORD);",
+        "BOOL CloseHandle(HANDLE);",
+        "HANDLE GetCurrentProcess(void);",
+        "DWORD GetWindowThreadProcessId(HWND, DWORD*);",
+        "BOOL OpenProcessToken(HANDLE, DWORD, HANDLE*);",
+        "BOOL GetTokenInformation(HANDLE, int, void*, DWORD, DWORD*);",
+    }
+    for _, decl in ipairs(elevDecls) do pcall(ffi.cdef, decl) end
+
+    local okAdv, ADV = pcall(ffi.load, "advapi32")
+    if not okAdv then ADV = nil end
+
+    local PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    local TOKEN_QUERY     = 0x0008
+    local TokenElevation  = 20
+
+    -- True, false, or nil when the token cannot be read
+    local function tokenElevated(proc)
+        local tok = ffi.new("HANDLE[1]")
+        if ADV.OpenProcessToken(proc, TOKEN_QUERY, tok) == 0 then return nil end
+        local value = ffi.new("DWORD[1]")
+        local len = ffi.new("DWORD[1]")
+        local got = ADV.GetTokenInformation(tok[0], TokenElevation, value, ffi.sizeof("DWORD"), len)
+        K.CloseHandle(tok[0])
+        if got == 0 then return nil end
+        return value[0] ~= 0
+    end
+
+    local hostElevated = nil
+
+    -- True when this process runs elevated
+    function uia.isElevated()
+        if hostElevated == nil then
+            local ok, v = pcall(tokenElevated, K.GetCurrentProcess())
+            hostElevated = ok and v or false
+        end
+        return hostElevated
+    end
+
+    -- True when the process owning pid runs elevated, treating an unreadable token as elevated
+    function uia.isProcessElevated(pid)
+        if ADV == nil or type(pid) ~= "number" then return false end
+        local h = K.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+        if h == nil then return true end
+        local ok, v = pcall(tokenElevated, h)
+        K.CloseHandle(h)
+        if not ok then return false end
+        return v ~= false
+    end
+
+    -- False when UIPI blocks reading target (hwnd, pid, window or app), the hs.accessibilityState analog
+    function uia.canInspect(target)
+        if ADV == nil or uia.isElevated() then return true end
+
+        local pid = nil
+        if type(target) == "number" then
+            pid = target
+        elseif type(target) == "cdata" then
+            local buf = ffi.new("DWORD[1]")
+            host.C.user32.GetWindowThreadProcessId(target, buf)
+            pid = tonumber(buf[0])
+        elseif type(target) == "table" and type(target.pid) == "function" then
+            pid = target:pid()
+        elseif type(target) == "table" and target._hwnd ~= nil then
+            return uia.canInspect(target._hwnd)
+        end
+
+        if pid == nil or pid == 0 then return true end
+        return not uia.isProcessElevated(pid)
+    end
+-- END --
+
 return uia

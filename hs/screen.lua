@@ -56,7 +56,31 @@ int  GetSystemMetrics(int);
 ]]
 -- END --
 
+-- DisplayConfig surface for friendly monitor names --
+    local displayDecls = {
+        "typedef struct { DWORD LowPart; LONG HighPart; } MS_LUID;",
+        "typedef struct { MS_LUID adapterId; unsigned int id; unsigned int modeInfoIdx; unsigned int statusFlags; } MS_DC_PATH_SOURCE;",
+        "typedef struct { MS_LUID adapterId; unsigned int id; unsigned int modeInfoIdx; int outputTechnology; int rotation; int scaling; unsigned int refreshNum; unsigned int refreshDen; int scanLineOrdering; BOOL targetAvailable; unsigned int statusFlags; } MS_DC_PATH_TARGET;",
+        "typedef struct { MS_DC_PATH_SOURCE sourceInfo; MS_DC_PATH_TARGET targetInfo; unsigned int flags; } MS_DC_PATH_INFO;",
+        "typedef struct { int infoType; unsigned int id; MS_LUID adapterId; BYTE body[48]; } MS_DC_MODE_INFO;",
+        "typedef struct { int type; unsigned int size; MS_LUID adapterId; unsigned int id; } MS_DC_HEADER;",
+        "typedef struct { MS_DC_HEADER header; unsigned short viewGdiDeviceName[32]; } MS_DC_SOURCE_NAME;",
+        "typedef struct { MS_DC_HEADER header; unsigned int flags; int outputTechnology; unsigned short edidManufactureId; unsigned short edidProductCodeId; unsigned int connectorInstance; unsigned short monitorFriendlyDeviceName[64]; unsigned short monitorDevicePath[128]; } MS_DC_TARGET_NAME;",
+        "typedef struct { DWORD cb; char DeviceName[32]; char DeviceString[128]; DWORD StateFlags; char DeviceID[128]; char DeviceKey[128]; } MS_DISPLAY_DEVICEA;",
+        "LONG GetDisplayConfigBufferSizes(unsigned int, unsigned int*, unsigned int*);",
+        "LONG QueryDisplayConfig(unsigned int, unsigned int*, MS_DC_PATH_INFO*, unsigned int*, MS_DC_MODE_INFO*, void*);",
+        "LONG DisplayConfigGetDeviceInfo(MS_DC_HEADER*);",
+        "BOOL EnumDisplayDevicesA(LPCSTR, DWORD, MS_DISPLAY_DEVICEA*, DWORD);",
+        "int WideCharToMultiByte(unsigned int, unsigned long, const unsigned short*, int, char*, int, const char*, BOOL*);",
+    }
+    for _, decl in ipairs(displayDecls) do pcall(ffi.cdef, decl) end
+-- END --
+
 -- Constants --
+    local QDC_ONLY_ACTIVE_PATHS = 0x00000002
+    local DC_GET_SOURCE_NAME    = 1
+    local DC_GET_TARGET_NAME    = 2
+    local CP_UTF8               = 65001
     local SM_CXSCREEN          = 0
     local SM_CYSCREEN          = 1
     local MONITORINFOF_PRIMARY = 0x00000001
@@ -87,9 +111,9 @@ int  GetSystemMetrics(int);
         end
     -- END --
 
-    -- :name() -> the Win32 device name (e.g. "\\.\DISPLAY1"). --
+    -- :name() -> the monitor's friendly name, or the Win32 device path. --
         function Screen:name()
-            return self.deviceName
+            return self.friendlyName or self.deviceName
         end
     -- END --
 
@@ -165,6 +189,88 @@ int  GetSystemMetrics(int);
     end
     local enumProc = ffi.cast("MONITORENUMPROC", enumProcFn)
 
+    -- Friendly names --
+        local K = host.C and host.C.kernel32
+
+        local function narrow(wide)
+            if K == nil or wide[0] == 0 then return nil end
+            local need = K.WideCharToMultiByte(CP_UTF8, 0, wide, -1, nil, 0, nil, nil)
+            if need <= 1 then return nil end
+            local buf = ffi.new("char[?]", need)
+            K.WideCharToMultiByte(CP_UTF8, 0, wide, -1, buf, need, nil, nil)
+            return ffi.string(buf)
+        end
+
+        -- Maps GDI device path to the EDID monitor name through DisplayConfig
+        local function displayConfigNames()
+            local names = {}
+            local nPaths = ffi.new("unsigned int[1]")
+            local nModes = ffi.new("unsigned int[1]")
+            if U.GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, nPaths, nModes) ~= 0 then return names end
+            if nPaths[0] == 0 then return names end
+
+            local paths = ffi.new("MS_DC_PATH_INFO[?]", nPaths[0])
+            local modes = ffi.new("MS_DC_MODE_INFO[?]", math.max(nModes[0], 1))
+            if U.QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, nPaths, paths, nModes, modes, nil) ~= 0 then return names end
+
+            for i = 0, nPaths[0] - 1 do
+                local p = paths[i]
+                local src = ffi.new("MS_DC_SOURCE_NAME")
+                src.header.type = DC_GET_SOURCE_NAME
+                src.header.size = ffi.sizeof("MS_DC_SOURCE_NAME")
+                src.header.adapterId = p.sourceInfo.adapterId
+                src.header.id = p.sourceInfo.id
+
+                local tgt = ffi.new("MS_DC_TARGET_NAME")
+                tgt.header.type = DC_GET_TARGET_NAME
+                tgt.header.size = ffi.sizeof("MS_DC_TARGET_NAME")
+                tgt.header.adapterId = p.targetInfo.adapterId
+                tgt.header.id = p.targetInfo.id
+
+                if U.DisplayConfigGetDeviceInfo(ffi.cast("MS_DC_HEADER*", src)) == 0
+                    and U.DisplayConfigGetDeviceInfo(ffi.cast("MS_DC_HEADER*", tgt)) == 0 then
+                    local device = narrow(src.viewGdiDeviceName)
+                    local friendly = narrow(tgt.monitorFriendlyDeviceName)
+                    if device and friendly and names[device] == nil then names[device] = friendly end
+                end
+            end
+            return names
+        end
+
+        -- The monitor's device string from EnumDisplayDevices, or nil
+        local function deviceString(deviceName)
+            local dd = ffi.new("MS_DISPLAY_DEVICEA")
+            dd.cb = ffi.sizeof("MS_DISPLAY_DEVICEA")
+            if U.EnumDisplayDevicesA(deviceName, 0, dd, 0) == 0 then return nil end
+            local str = ffi.string(dd.DeviceString)
+            return str ~= "" and str or nil
+        end
+
+        local nameCache = { key = nil, names = {} }
+
+        -- Fills friendlyName on each raw record, re-querying only when the monitor set changes
+        local function nameScreens(raws)
+            local devices = {}
+            for i, r in ipairs(raws) do devices[i] = r.deviceName end
+            local key = table.concat(devices, "|")
+
+            if nameCache.key ~= key then
+                local ok, names = pcall(displayConfigNames)
+                if not ok then names = {} end
+                for _, r in ipairs(raws) do
+                    if names[r.deviceName] == nil then
+                        local okDev, dev = pcall(deviceString, r.deviceName)
+                        names[r.deviceName] = okDev and dev or nil
+                    end
+                end
+                nameCache.key = key
+                nameCache.names = names
+            end
+
+            for _, r in ipairs(raws) do r.friendlyName = nameCache.names[r.deviceName] end
+        end
+    -- END --
+
     -- Fallback single screen from GetSystemMetrics, mirroring the spike's assumption. --
         -- Used only if EnumDisplayMonitors yields nothing (rare: session 0, headless).
         local function fallbackScreen()
@@ -215,6 +321,7 @@ int  GetSystemMetrics(int);
 
             local raws = collected
             if #raws == 0 then raws = { fallbackScreen() } end
+            nameScreens(raws)
 
             return finish(raws)
         end

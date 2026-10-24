@@ -24,6 +24,7 @@ BOOL  EnumWindows(WNDENUMPROC, LPARAM);
 BOOL  BringWindowToTop(HWND);
 BOOL  ShowWindow(HWND, int);
 BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
+HANDLE MonitorFromWindow(HWND, DWORD);
 ]]
 -- END --
 
@@ -42,6 +43,8 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
     local GWL_EXSTYLE     = -20
     local WS_CAPTION      = 0x00C00000  -- has a title bar (normal app window)
     local WS_EX_TOOLWINDOW = 0x00000080 -- palette/tool window (not a standard window)
+    local WS_THICKFRAME   = 0x00040000
+    local MONITOR_DEFAULTTONEAREST = 0x00000002
 -- END --
 
 -- Real hs.geometry resolver (memoized only once a REAL one is found) --
@@ -174,8 +177,29 @@ BOOL  SetWindowPos(HWND, HWND, int, int, int, int, UINT);
     function Window:isMinimized()
         return U.IsIconic(self._hwnd) ~= 0
     end
+    local monitorInfo = nil
+
+    -- True for a borderless window covering its whole monitor, as macOS fullscreen
     function Window:isFullScreen()
-        return U.IsZoomed(self._hwnd) ~= 0
+        local hwnd = self._hwnd
+        if hwnd == nil or U.IsWindow(hwnd) == 0 or U.IsIconic(hwnd) ~= 0 then return false end
+
+        local style = tonumber(U.GetWindowLongA(hwnd, GWL_STYLE)) & 0xFFFFFFFF
+        if (style & WS_CAPTION) == WS_CAPTION or (style & WS_THICKFRAME) ~= 0 then return false end
+
+        local mon = U.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        if mon == nil then return false end
+        if monitorInfo == nil then
+            require("hs.screen")
+            monitorInfo = ffi.new("MONITORINFOEXA")
+        end
+        monitorInfo.cbSize = ffi.sizeof("MONITORINFOEXA")
+        if U.GetMonitorInfoA(mon, monitorInfo) == 0 then return false end
+        if U.GetWindowRect(hwnd, rectBuf) == 0 then return false end
+
+        local m = monitorInfo.rcMonitor
+        return rectBuf.left <= m.left and rectBuf.top <= m.top
+            and rectBuf.right >= m.right and rectBuf.bottom >= m.bottom
     end
 
     -- Returns the window itself, as uielement watcher callbacks expect

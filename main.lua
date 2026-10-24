@@ -325,7 +325,7 @@ int MoveFileExA(const char*, const char*, unsigned long);
         "pasteboard", "urlevent", "http", "task", "menubar", "notify", "dialog", "sound",
         "audiodevice", "websocket", "pathwatcher", "axuielement", "uielement", "focus",
         "distributednotifications", "processInfo", "image", "settings", "socket", "chooser", "hash",
-        "host", "caffeinate" }
+        "host", "caffeinate", "uia" }
     if ENABLE_WEBVIEW then realExtra[#realExtra + 1] = "webview" end
     for _, name in ipairs(realExtra) do
         hs[name] = require("hs." .. name)

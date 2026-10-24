@@ -463,6 +463,26 @@ test("screen", "main-frame", "behavior", function()
     return { w = f.w, h = f.h }
 end)
 
+-- screen: name() is a readable display name, not a Win32 device path
+test("screen", "readable-name", "behavior", function()
+    local scr = hs.screen.mainScreen()
+    if scr == nil then skip("no main screen") end
+    local n = scr:name()
+    need(type(n) == "string" and n ~= "", "name() returned " .. tostring(n))
+    need(n:sub(1, 4) ~= "\\\\.\\", "name() is the device path " .. n)
+    return { name = n }
+end)
+
+-- window: isFullScreen() returns a boolean that matches its alias
+test("window", "fullscreen-shape", "behavior", function()
+    local w = hs.window.focusedWindow()
+    if w == nil then skip("no focused window") end
+    local fs = w:isFullScreen()
+    need(type(fs) == "boolean", "isFullScreen() returned " .. type(fs))
+    need(fs == w:isFullscreen(), "isFullscreen alias disagrees")
+    return { fullscreen = fs }
+end)
+
 -- window: a focused window (if any) reports a numeric frame.
 test("window", "frame-shape", "behavior", function()
     local w = hs.window.focusedWindow()
