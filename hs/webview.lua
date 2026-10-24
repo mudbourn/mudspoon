@@ -925,6 +925,13 @@ webview.usercontent = usercontent
         return self
     end
 
+    -- :hswindow() -> hs.window for the view's HWND, or nil once deleted
+    function Webview:hswindow()
+        if self._deleted or self._hwnd == nil then return nil end
+
+        return require("hs.window")._newWindow(self._hwnd)
+    end
+
     -- :delete() -- destroy the view and window. Idempotent. Closes the controller
     -- (which releases the CoreWebView2), destroys the HWND, and drops the queue.
     function Webview:delete()
