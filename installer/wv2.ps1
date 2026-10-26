@@ -1,4 +1,4 @@
-# Installs the WebView2 runtime when missing, used by the installer #
+# Installs the WebView2 runtime when missing, used by install.ps1 #
 $ErrorActionPreference = "Stop"
 
 $guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"

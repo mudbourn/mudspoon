@@ -49,25 +49,18 @@ jobs:
               throw "Tag $env:TAG does not match installer\VERSION ($version)."
           }
 
-      - name: Install Inno Setup
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
-              choco install innosetup --no-progress -y
-          }
-
-      - name: Build the installer
+      - name: Build the app zip
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1
 
-      - name: Attach the installer to the release
+      - name: Attach the app zip to the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:TAG
-          $setup = "installer\Output\Mudspoon-Setup.exe"
-          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash
+          $zip = "installer\Output\Mudspoon.zip"
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
 
           gh release view $tag *> $null
 
@@ -75,7 +68,7 @@ jobs:
               gh release create $tag --target $env:REF --title $tag --notes "Mudspoon $tag"
           }
 
-          gh release upload $tag $setup --clobber
+          gh release upload $tag $zip --clobber
           $notes = gh release view $tag --json body --jq .body
-          $notes = ($notes.TrimEnd() + "`n`nSHA-256 of Mudspoon-Setup.exe: $hash").Trim()
+          $notes = ($notes.TrimEnd() + "`n`nSHA-256 of Mudspoon.zip: $hash").Trim()
           gh release edit $tag --notes $notes

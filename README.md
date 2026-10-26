@@ -14,16 +14,15 @@ misreports the low-level hooks.
 
 ## Install
 
-In PowerShell or Command Prompt:
+In PowerShell:
 
 ```
-winget install mudbourn.Mudspoon
+irm https://raw.githubusercontent.com/mudbourn/mudscript/main/win/install.ps1 | iex
 ```
 
-This installs Hammerspoon for Windows for the current user and adds Start menu
-and desktop shortcuts. `winget upgrade mudbourn.Mudspoon` updates it.
-`Mudspoon-Setup.exe` from the GitHub releases page installs the same thing, but
-Windows warns about it because the installer is not code signed.
+This installs Hammerspoon for Windows and mudscript for the current user and
+adds Start menu shortcuts. Running it again updates both or uninstalls them.
+Each release also carries `Mudspoon.zip`, the app folder on its own.
 
 ## Layout
 
@@ -37,7 +36,7 @@ Windows warns about it because the installer is not code signed.
 - `launch.ps1`, `stop.ps1`, `watchdog.ps1`, `tray.ps1`: start, stop and guard the
   windowless host.
 - `hs.cmd`: the `hs` command line client for the `hs.ipc` endpoint.
-- `installer/`: the Inno Setup installer.
+- `installer/`: `build.ps1`, which packages the app as `Mudspoon.zip`.
 - `test/`: the smoke and parity suite.
 
 `CONTRIBUTING.md` holds the module contracts and `WRITING_STYLE.md` the style
@@ -45,13 +44,13 @@ rules.
 
 ## Installing
 
-`installer\build.ps1` stages the host and the Lua runtime, then compiles `installer\Output\Mudspoon-Setup.exe` with Inno Setup 6.
+`installer\build.ps1` stages the host and the Lua runtime, then packs them into `installer\Output\Mudspoon.zip`.
 
 ```
 powershell -ExecutionPolicy Bypass -File installer\build.ps1
 ```
 
-The installer puts the app under `%LOCALAPPDATA%\Mudspoon\app`: the host, the
+The install script puts the app under `%LOCALAPPDATA%\Mudspoon\app`: the host, the
 Lua runtime and the launch scripts. The config lives in `%USERPROFILE%\.hammerspoon`
 and is never touched by install or uninstall.
 
